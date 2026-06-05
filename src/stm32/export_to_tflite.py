@@ -17,8 +17,23 @@ def _export_from_pt(weights_path: Path, destination: Path, imgsz: int) -> Path:
     model = YOLO(str(weights_path))
     exported = model.export(format="tflite", imgsz=imgsz, simplify=True)
     exported_path = Path(str(exported))
-    if exported_path.resolve() != destination.resolve():
-        shutil.copy2(exported_path, destination)
+
+    if exported_path.is_dir():
+        # Find the .tflite file inside the directory
+        tflite_files = list(exported_path.glob("*.tflite"))
+        if not tflite_files:
+            # Check nested directories if any
+            tflite_files = list(exported_path.glob("**/*.tflite"))
+        if not tflite_files:
+            raise FileNotFoundError(
+                f"No .tflite file found in the exported folder: {exported_path}"
+            )
+        source_file = tflite_files[0]
+    else:
+        source_file = exported_path
+
+    if source_file.resolve() != destination.resolve():
+        shutil.copy2(source_file, destination)
     return destination
 
 

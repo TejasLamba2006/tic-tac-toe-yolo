@@ -35,6 +35,7 @@ class AppConfig:
     auto_max_index: int
     headless: bool
     device: str | None
+    npu: bool
 
 
 @dataclass(frozen=True)
@@ -168,6 +169,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Ultralytics device string, for example cpu or 0")
     parser.add_argument("--headless", action="store_true",
                         help="Disable the preview window")
+    parser.add_argument("--npu", action="store_true",
+                        help="Enable hardware NPU acceleration via vx delegate (STM32MP257)")
     return parser
 
 
@@ -297,6 +300,7 @@ def run_app(config: AppConfig) -> int:
         iou_threshold=config.iou_threshold,
         image_size=config.image_size,
         device=config.device,
+        use_npu=config.npu,
     )
     board_detector = BoardDetector()
     board_estimator = BoardStateEstimator(
@@ -367,6 +371,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         auto_max_index=args.auto_max_index,
         headless=args.headless,
         device=args.device,
+        npu=args.npu,
     )
     if args.gui == "tkinter":
         from src.gui.tkinter_app import run_tkinter_app
