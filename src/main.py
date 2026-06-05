@@ -12,9 +12,10 @@ import numpy as np
 from .ai.move_selector import MoveDecision, recommend_move
 from .ai.yolo_inference import YoloInference
 from .vision.board_detector import BoardDetectionResult, BoardDetector
-from .vision.board_state import BoardObservation, BoardStateEstimator, format_board
+from .vision.board_state import BoardObservation, BoardStateEstimator, Detection, format_board
 from .vision.camera import configure_capture, open_camera, parse_camera_source
 from .vision.perspective import PerspectiveTransform, canonical_cell_polygon, warp_image, warp_points
+from .vision.stability import BoardGeometryTracker
 
 
 @dataclass
@@ -27,6 +28,7 @@ class AppConfig:
     frame_height: int
     fps: int
     confidence_threshold: float
+    board_min_confidence: float
     iou_threshold: float
     image_size: int
     smoothing_window: int
@@ -45,11 +47,94 @@ class FrameAnalysis:
     decision: MoveDecision
     inference_ms: float
     fps: float
-    detections: tuple
+    detections: tuple[Detection, ...]
+
+
+def _label_color(label: str, class_id: int) -> tuple[int, int, int]:
+    palette = {
+        "empty": (140, 140, 140),
+        "red_ball": (0, 0, 255),
+        "yellow_ball": (0, 220, 255),
+    }
+    if label in palette:
+        return palette[label]
+
+    seed = (class_id * 73) % 255
+    return (seed, 255 - seed, 160 + seed // 2)
+
+
+def _draw_grid(image: np.ndarray) -> np.ndarray:
+    grid = image.copy()
+    height, width = grid.shape[:2]
+    step_x = width // 3
+    step_y = height // 3
+
+    for index in (1, 2):
+        cv2.line(grid, (index * step_x, 0), (index * step_x, height),
+                 (80, 80, 80), 1, cv2.LINE_AA)
+        cv2.line(grid, (0, index * step_y), (width, index * step_y),
+                 (80, 80, 80), 1, cv2.LINE_AA)
+
+    return grid
+
+
+def _draw_detection_boxes(image: np.ndarray, detections: Sequence[Detection]) -> np.ndarray:
+    annotated = image.copy()
+    height, width = annotated.shape[:2]
+
+    for detection in detections:
+        x1, y1, x2, y2 = detection.xyxy
+        color = _label_color(detection.label, detection.class_id)
+        left = int(np.clip(x1, 0, width - 1))
+        top = int(np.clip(y1, 0, height - 1))
+        right = int(np.clip(x2, 0, width - 1))
+        bottom = int(np.clip(y2, 0, height - 1))
+
+        cv2.rectangle(annotated, (left, top),
+                      (right, bottom), color, 2, cv2.LINE_AA)
+        label = f"{detection.label} {detection.confidence:.2f}"
+        text_y = max(14, top - 6)
+        cv2.putText(annotated, label, (left, text_y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, color, 1, cv2.LINE_AA)
+
+    return annotated
+
+
+def _overlay_inset(frame: np.ndarray, inset: np.ndarray, x: int, y: int) -> np.ndarray:
+    rendered = frame.copy()
+    inset_height, inset_width = inset.shape[:2]
+    frame_height, frame_width = rendered.shape[:2]
+    x = max(0, min(frame_width - inset_width - 8, x))
+    y = max(0, min(frame_height - inset_height - 8, y))
+
+    roi = rendered[y:y + inset_height, x:x + inset_width]
+    if roi.shape[:2] != inset.shape[:2]:
+        return rendered
+
+    blended = cv2.addWeighted(roi, 0.10, inset, 0.90, 0)
+    rendered[y:y + inset_height, x:x + inset_width] = blended
+    cv2.rectangle(rendered, (x, y), (x + inset_width, y +
+                  inset_height), (255, 255, 255), 1, cv2.LINE_AA)
+    return rendered
+
+
+def _build_board_inset(analysis: FrameAnalysis, inset_size: int = 280) -> np.ndarray:
+    board_preview = analysis.warped_frame.copy()
+    board_preview = _draw_grid(board_preview)
+    board_preview = _draw_detection_boxes(board_preview, analysis.detections)
+    resized = cv2.resize(
+        board_preview, (inset_size, inset_size), interpolation=cv2.INTER_AREA)
+
+    cv2.rectangle(resized, (0, 0), (inset_size - 1, 24), (18, 18, 18), -1)
+    cv2.putText(resized, f"Warped board | {analysis.board_result.method}", (
+        8, 17), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
+    return resized
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Tic-tac-toe vision pipeline")
+    parser.add_argument("--gui", default="opencv", choices=("opencv", "tkinter"),
+                        help="User interface mode")
     parser.add_argument("--camera", default="auto",
                         help="Camera source: index, /dev/videoX, or auto")
     parser.add_argument(
@@ -69,12 +154,14 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Requested camera frame rate")
     parser.add_argument("--confidence-threshold", type=float,
                         default=0.25, help="YOLO confidence threshold")
+    parser.add_argument("--board-min-confidence", type=float,
+                        default=0.15, help="Minimum confidence required for a cell to stay in the matrix")
     parser.add_argument("--iou-threshold", type=float,
                         default=0.45, help="YOLO IoU threshold")
     parser.add_argument("--image-size", type=int, default=640,
                         help="YOLO inference image size")
     parser.add_argument("--smoothing-window", type=int,
-                        default=3, help="Majority-vote history window")
+                        default=5, help="Board-state history window used for stabilization")
     parser.add_argument("--auto-max-index", type=int, default=10,
                         help="Highest integer camera index to probe")
     parser.add_argument("--device", default=None,
@@ -91,13 +178,26 @@ def analyze_frame(
     board_estimator: BoardStateEstimator,
     ai_color: str,
     board_size: int,
+    geometry_tracker: BoardGeometryTracker | None = None,
 ) -> FrameAnalysis:
     board_result = board_detector.detect(frame)
+    if geometry_tracker is not None:
+        board_result = geometry_tracker.update(board_result)
+
     transform = board_result.build_transform(board_size)
     warped_frame = warp_image(frame, transform)
 
     start = time.perf_counter()
+    # cv2.imwrite("debug_warped.jpg", warped_frame)
     detections = detector.predict(warped_frame)
+    # print("\nRAW DETECTIONS")
+
+    # for d in detections:
+    #     print(
+    #         f"{d.label:12} "
+    #         f"{d.confidence:.2f} "
+    #         f"{d.xyxy}"
+    #     )
     observation = board_estimator.estimate(warped_frame, detections)
     decision = recommend_move(observation.board, ai_player=ai_color)
     elapsed_ms = (time.perf_counter() - start) * 1000.0
@@ -145,6 +245,9 @@ def _draw_panel(frame: np.ndarray, analysis: FrameAnalysis) -> np.ndarray:
     cv2.putText(rendered, f"Inference: {analysis.inference_ms:.1f} ms", (
         28, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 220, 220), 1, cv2.LINE_AA)
     y += line_height
+    cv2.putText(rendered, f"Detections: {len(analysis.detections)}", (
+        28, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 220, 220), 1, cv2.LINE_AA)
+    y += line_height
 
     if analysis.decision.recommendation is not None:
         move = analysis.decision.recommendation
@@ -175,6 +278,10 @@ def _draw_panel(frame: np.ndarray, analysis: FrameAnalysis) -> np.ndarray:
         cv2.polylines(rendered, [analysis.board_result.corners.astype(
             np.int32)], True, (0, 160, 255), 2, cv2.LINE_AA)
 
+    inset = _build_board_inset(analysis)
+    rendered = _overlay_inset(
+        rendered, inset, rendered.shape[1] - inset.shape[1] - 12, rendered.shape[0] - inset.shape[0] - 12)
+
     return rendered
 
 
@@ -193,7 +300,9 @@ def run_app(config: AppConfig) -> int:
     )
     board_detector = BoardDetector()
     board_estimator = BoardStateEstimator(
+        minimum_confidence=config.board_min_confidence,
         smoothing_window=config.smoothing_window)
+    geometry_tracker = BoardGeometryTracker()
 
     window_name = "Tic-Tac-Toe Vision"
     display_enabled = not config.headless
@@ -215,6 +324,7 @@ def run_app(config: AppConfig) -> int:
                 board_estimator=board_estimator,
                 ai_color=config.ai_color,
                 board_size=config.board_size,
+                geometry_tracker=geometry_tracker,
             )
 
             rendered = _draw_panel(frame, analysis)
@@ -250,6 +360,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         frame_height=args.frame_height,
         fps=args.fps,
         confidence_threshold=args.confidence_threshold,
+        board_min_confidence=args.board_min_confidence,
         iou_threshold=args.iou_threshold,
         image_size=args.image_size,
         smoothing_window=args.smoothing_window,
@@ -257,6 +368,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         headless=args.headless,
         device=args.device,
     )
+    if args.gui == "tkinter":
+        from src.gui.tkinter_app import run_tkinter_app
+
+        return run_tkinter_app(config)
+
     return run_app(config)
 
 

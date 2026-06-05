@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from collections import Counter, deque
 from dataclasses import dataclass, field
+from math import ceil
 from typing import Iterable, Sequence
+import cv2
 
 import numpy as np
 
@@ -49,7 +51,7 @@ class BoardStateEstimator:
 
     The model already predicts one cell-state box per board cell. The estimator
     therefore assigns each detection to the nearest canonical cell center and then
-    uses a small majority-vote history to smooth out single-frame jitter.
+    keeps a per-cell vote history so one noisy frame does not flip the board.
     """
 
     def __init__(
@@ -58,27 +60,34 @@ class BoardStateEstimator:
         rows: int = 3,
         cols: int = 3,
         minimum_confidence: float = 0.15,
-        smoothing_window: int = 1,
+        smoothing_window: int = 5,
+        stability_ratio: float = 0.6,
     ) -> None:
         self.rows = rows
         self.cols = cols
         self.minimum_confidence = minimum_confidence
+        self.stability_ratio = stability_ratio
         self.label_to_symbol = label_to_symbol or {
             "empty": "E",
             "red_ball": "R",
             "yellow_ball": "Y",
         }
-        self._history: deque[list[list[str]]] = deque(
-            maxlen=max(1, smoothing_window))
+        history_size = max(1, smoothing_window)
+        self._cell_history: list[list[deque[str]]] = [
+            [deque(maxlen=history_size) for _ in range(self.cols)]
+            for _ in range(self.rows)
+        ]
+        self._stable_board: list[list[str]] = [
+            ["E" for _ in range(self.cols)]
+            for _ in range(self.rows)
+        ]
+        self._initialized = False
 
     def estimate(self, image: np.ndarray, detections: Iterable[Detection]) -> BoardObservation:
         detection_list = list(detections)
-        board, confidences, sources = self._estimate_once(
+        instant_board, confidences, sources = self._estimate_once(
             image, detection_list)
-        self._history.append(_clone_board(board))
-
-        if len(self._history) > 1:
-            board = self._majority_board(board)
+        board = self._stabilize_board(instant_board)
 
         return BoardObservation(
             board=board,
@@ -87,67 +96,174 @@ class BoardStateEstimator:
             detections=tuple(detection_list),
         )
 
+    def _find_board_bbox(self, image: np.ndarray):
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+
+        lower_blue = np.array([80, 40, 40])
+        upper_blue = np.array([140, 255, 255])
+
+        mask = cv2.inRange(hsv, lower_blue, upper_blue)
+
+        kernel = np.ones((5, 5), np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+
+        contours, _ = cv2.findContours(
+            mask,
+            cv2.RETR_EXTERNAL,
+            cv2.CHAIN_APPROX_SIMPLE,
+        )
+
+        if not contours:
+            return 0, 0, image.shape[1], image.shape[0]
+
+        largest = max(contours, key=cv2.contourArea)
+
+        return cv2.boundingRect(largest)
+
     def _estimate_once(
         self,
         image: np.ndarray,
         detections: Iterable[Detection],
     ) -> tuple[list[list[str]], list[list[float]], list[list[str]]]:
-        height, width = image.shape[:2]
-        cell_width = width / float(self.cols)
-        cell_height = height / float(self.rows)
 
+        board_x, board_y, board_w, board_h = self._find_board_bbox(image)
+
+        cell_width = board_w / float(self.cols)
+        cell_height = board_h / float(self.rows)
         board = [["E" for _ in range(self.cols)] for _ in range(self.rows)]
         confidences = [[0.0 for _ in range(self.cols)]
                        for _ in range(self.rows)]
         sources = [["" for _ in range(self.cols)] for _ in range(self.rows)]
+        priorities = [[(-1, 0.0) for _ in range(self.cols)]
+                      for _ in range(self.rows)]
 
         for detection in detections:
             symbol = self.label_to_symbol.get(detection.label)
             if symbol is None or detection.confidence < self.minimum_confidence:
                 continue
 
-            center_x, center_y = detection.center
-            row = self._nearest_index(center_y, cell_height, self.rows)
-            col = self._nearest_index(center_x, cell_width, self.cols)
+            row, col, assignment_score = self._best_cell_for_detection(
+                detection.xyxy,
+                cell_width,
+                cell_height,
+                board_x,
+                board_y,
+            )
+            priority = 1 if symbol != "E" else 0
+            candidate = (priority, assignment_score)
 
-            target_center_x = (col + 0.5) * cell_width
-            target_center_y = (row + 0.5) * cell_height
-            normalized_distance = (
-                abs(center_x - target_center_x) / max(cell_width, 1.0)
-                + abs(center_y - target_center_y) / max(cell_height, 1.0)
-            ) / 2.0
-            assignment_score = detection.confidence * \
-                max(0.1, 1.0 - min(normalized_distance, 1.0))
-
-            if assignment_score >= confidences[row][col]:
+            if candidate >= priorities[row][col]:
                 board[row][col] = symbol
                 confidences[row][col] = float(assignment_score)
                 sources[row][col] = detection.label
+                priorities[row][col] = candidate
 
         return board, confidences, sources
+
+    def _best_cell_for_detection(
+        self,
+        xyxy,
+        cell_width,
+        cell_height,
+        board_x,
+        board_y,
+    ):
+
+        x1, y1, x2, y2 = xyxy
+
+        center_x = (x1 + x2) / 2.0
+        center_y = (y1 + y2) / 2.0
+
+        local_x = center_x - board_x
+        local_y = center_y - board_y
+
+        col = int(local_x / cell_width)
+        row = int(local_y / cell_height)
+
+        row = max(0, min(self.rows - 1, row))
+        col = max(0, min(self.cols - 1, col))
+
+        return row, col, 1.0
+
+    def _stabilize_board(self, instant_board: list[list[str]]) -> list[list[str]]:
+        if not self._initialized:
+            self._initialized = True
+            self._stable_board = _clone_board(instant_board)
+
+        next_board = _clone_board(self._stable_board)
+        required_votes = self._required_votes()
+        self._update_stable_board(next_board, instant_board, required_votes)
+
+        self._stable_board = next_board
+        return _clone_board(self._stable_board)
+
+    def _required_votes(self) -> int:
+        history_size = self._cell_history[0][0].maxlen or 1
+        return max(2, ceil(history_size * self.stability_ratio))
+
+    def _update_stable_board(
+        self,
+        next_board: list[list[str]],
+        instant_board: list[list[str]],
+        required_votes: int,
+    ) -> None:
+        for row_index in range(self.rows):
+            self._update_stable_row(
+                next_board, instant_board, required_votes, row_index)
+
+    def _update_stable_row(
+        self,
+        next_board: list[list[str]],
+        instant_board: list[list[str]],
+        required_votes: int,
+        row_index: int,
+    ) -> None:
+        for col_index in range(self.cols):
+            self._update_stable_cell(
+                next_board, instant_board, required_votes, row_index, col_index)
+
+    def _update_stable_cell(
+        self,
+        next_board: list[list[str]],
+        instant_board: list[list[str]],
+        required_votes: int,
+        row_index: int,
+        col_index: int,
+    ) -> None:
+        history = self._cell_history[row_index][col_index]
+        history.append(instant_board[row_index][col_index])
+        label = self._select_history_label(history)
+        current_label = next_board[row_index][col_index]
+
+        if self._should_flip_cell(history, current_label, label, required_votes):
+            next_board[row_index][col_index] = label
+
+    def _select_history_label(self, history: Sequence[str]) -> str:
+        counts = Counter(history)
+        max_votes = max(counts.values())
+        for candidate in reversed(history):
+            if counts[candidate] == max_votes:
+                return candidate
+        return history[-1]
+
+    def _should_flip_cell(
+        self,
+        history: Sequence[str],
+        current_label: str,
+        new_label: str,
+        required_votes: int,
+    ) -> bool:
+        counts = Counter(history)
+        current_votes = counts.get(current_label, 0)
+        new_votes = counts.get(new_label, 0)
+
+        return new_label != current_label and (
+            (new_votes > current_votes and new_votes >= required_votes)
+            or (current_votes <= 1 and new_votes == current_votes)
+        )
 
     def _nearest_index(self, value: float, step: float, limit: int) -> int:
         if step <= 0:
             return 0
         index = int(value / step)
         return max(0, min(limit - 1, index))
-
-    def _majority_board(self, latest_board: list[list[str]]) -> list[list[str]]:
-        history = list(self._history)
-        if not history:
-            return latest_board
-
-        majority = [["E" for _ in range(self.cols)] for _ in range(self.rows)]
-        for row_index in range(self.rows):
-            for col_index in range(self.cols):
-                candidates = [board[row_index][col_index] for board in history]
-                counts = Counter(candidates)
-                best_count = max(counts.values())
-                best_symbols = {symbol for symbol,
-                                count in counts.items() if count == best_count}
-                if latest_board[row_index][col_index] in best_symbols:
-                    majority[row_index][col_index] = latest_board[row_index][col_index]
-                else:
-                    majority[row_index][col_index] = next(
-                        symbol for symbol in candidates[::-1] if symbol in best_symbols)
-        return majority

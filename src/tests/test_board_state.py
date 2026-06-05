@@ -43,6 +43,33 @@ def test_board_state_prefers_highest_scoring_detection_in_same_cell() -> None:
     assert observation.board[0][0] == "R"
 
 
+def test_board_state_prefers_ball_over_empty_for_matrix_cells() -> None:
+    image = np.zeros((300, 300, 3), dtype=np.uint8)
+    detections = [
+        Detection(0, "empty", 0.95, (0, 0, 100, 100)),
+        Detection(1, "red_ball", 0.80, (0, 0, 100, 100)),
+    ]
+
+    estimator = BoardStateEstimator(smoothing_window=1)
+    observation = estimator.estimate(image, detections)
+
+    assert observation.board[0][0] == "R"
+
+
+def test_board_state_uses_cell_overlap_for_wide_boxes() -> None:
+    image = np.zeros((300, 300, 3), dtype=np.uint8)
+    detections = [
+        Detection(1, "red_ball", 0.92, (0, 20, 140, 140)),
+        Detection(2, "yellow_ball", 0.91, (90, 20, 230, 140)),
+    ]
+
+    estimator = BoardStateEstimator(smoothing_window=1)
+    observation = estimator.estimate(image, detections)
+
+    assert observation.board[0][0] == "R"
+    assert observation.board[0][1] == "Y"
+
+
 def test_board_state_smoothing_keeps_recent_majority() -> None:
     image = np.zeros((300, 300, 3), dtype=np.uint8)
     estimator = BoardStateEstimator(smoothing_window=3)

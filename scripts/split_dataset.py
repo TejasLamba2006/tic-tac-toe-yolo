@@ -4,7 +4,7 @@ import shutil
 
 random.seed(42)
 
-dataset = Path("dataset")
+dataset = Path("dataset4")
 
 images_dir = dataset / "images"
 labels_dir = dataset / "labels"

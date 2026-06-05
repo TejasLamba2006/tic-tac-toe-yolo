@@ -47,6 +47,8 @@ class BoardDetector:
         self.adaptive_block_size = adaptive_block_size if adaptive_block_size % 2 == 1 else adaptive_block_size + 1
         self.adaptive_c = adaptive_c
         self.contour_epsilon_ratio = contour_epsilon_ratio
+        # Pre-allocated kernel reused every frame to avoid repeated numpy allocation.
+        self._morph_kernel = np.ones((3, 3), dtype=np.uint8)
 
     def detect(self, frame: np.ndarray) -> BoardDetectionResult:
         height, width = frame.shape[:2]
@@ -86,13 +88,12 @@ class BoardDetector:
         )
 
     def _candidate_masks(self, frame: np.ndarray):
+        # gray + blur computed once; both passes reuse the same blurred image.
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         blurred = cv2.GaussianBlur(gray, (self.blur_size, self.blur_size), 0)
 
         edges = cv2.Canny(blurred, self.canny_low, self.canny_high)
-        edge_kernel = np.ones((3, 3), dtype=np.uint8)
-        edges = cv2.morphologyEx(
-            edges, cv2.MORPH_CLOSE, edge_kernel, iterations=2)
+        edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, self._morph_kernel, iterations=2)
         yield "canny", edges
 
         adaptive = cv2.adaptiveThreshold(
@@ -103,16 +104,13 @@ class BoardDetector:
             self.adaptive_block_size,
             self.adaptive_c,
         )
-        adaptive = cv2.morphologyEx(
-            adaptive, cv2.MORPH_CLOSE, edge_kernel, iterations=2)
+        adaptive = cv2.morphologyEx(adaptive, cv2.MORPH_CLOSE, self._morph_kernel, iterations=2)
         yield "adaptive", adaptive
 
     def _contours(self, mask: np.ndarray):
-        contours = cv2.findContours(
-            mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if len(contours) == 3:
-            return contours[1]
-        return contours[0]
+        # Modern OpenCV always returns a 2-tuple (contours, hierarchy).
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        return contours
 
     def _quadrilateral_from_contour(
         self,
