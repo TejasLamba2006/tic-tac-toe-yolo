@@ -77,11 +77,15 @@ class YoloInference:
         self.device = device
         self.use_npu = use_npu
 
-        if self.weights_path.suffix.lower() == ".tflite":
-            self.use_tflite = True
+        suffix = self.weights_path.suffix.lower()
+        if suffix == ".tflite":
+            self.model_type = "tflite"
             self._init_tflite()
+        elif suffix == ".onnx":
+            self.model_type = "onnx"
+            self._init_onnx()
         else:
-            self.use_tflite = False
+            self.model_type = "ultralytics"
             self._init_ultralytics()
 
     def _init_tflite(self) -> None:
@@ -119,6 +123,42 @@ class YoloInference:
         # Tic-tac-toe classes
         self.class_names = {0: "empty", 1: "red_ball", 2: "yellow_ball"}
 
+    def _init_onnx(self) -> None:
+        try:
+            import onnxruntime as ort
+        except ImportError as exc:
+            raise RuntimeError(
+                "onnxruntime is required for ONNX inference. Install it before running."
+            ) from exc
+
+        session_options = ort.SessionOptions()
+        session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+
+        providers = []
+        if self.use_npu:
+            providers.append('VSINPUExecutionProvider')
+        providers.append('CPUExecutionProvider')
+
+        self.session = ort.InferenceSession(
+            str(self.weights_path),
+            sess_options=session_options,
+            providers=providers,
+        )
+        self.input_name = self.session.get_inputs()[0].name
+        self.input_shape = self.session.get_inputs()[0].shape
+
+        # Tic-tac-toe classes
+        self.class_names = {0: "empty", 1: "red_ball", 2: "yellow_ball"}
+        try:
+            meta = self.session.get_modelmeta()
+            if meta and meta.custom_metadata_map and 'names' in meta.custom_metadata_map:
+                import ast
+                names = ast.literal_eval(meta.custom_metadata_map['names'])
+                if isinstance(names, dict):
+                    self.class_names = {int(k): str(v) for k, v in names.items()}
+        except Exception:
+            pass
+
     def _init_ultralytics(self) -> None:
         try:
             from ultralytics import YOLO
@@ -138,9 +178,99 @@ class YoloInference:
 
     def predict(self, frame: np.ndarray) -> list[Detection]:
         """Run inference on a single frame and return parsed detections."""
-        if self.use_tflite:
+        if self.model_type == "tflite":
             return self._predict_tflite(frame)
+        elif self.model_type == "onnx":
+            return self._predict_onnx(frame)
         return self._predict_ultralytics(frame)
+
+    def _predict_onnx(self, frame: np.ndarray) -> list[Detection]:
+        h, w = frame.shape[:2]
+
+        # Determine if the layout is NCHW or NHWC
+        if self.input_shape[1] == 3 or self.input_shape[1] == 1:
+            # NCHW
+            net_h, net_w = self.input_shape[2], self.input_shape[3]
+            is_bchw = True
+        else:
+            # NHWC
+            net_h, net_w = self.input_shape[1], self.input_shape[2]
+            is_bchw = False
+
+        # Preprocess frame (resize, RGB, normalization)
+        resized = cv2.resize(frame, (net_w, net_h), interpolation=cv2.INTER_LINEAR)
+        rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+        input_data = rgb.astype(np.float32) / 255.0
+
+        if is_bchw:
+            input_data = np.transpose(input_data, (2, 0, 1))
+
+        input_data = np.expand_dims(input_data, axis=0)
+
+        # Run inference
+        outputs = self.session.run(None, {self.input_name: input_data})
+        output_tensor = outputs[0]
+
+        # Post-process (same as TFLite)
+        output_shape = output_tensor.shape
+        if len(output_shape) == 3:
+            if output_shape[1] < output_shape[2]:
+                # Shape is [1, 7, 8400] -> transpose to [7, 8400]
+                output = output_tensor[0]
+            else:
+                # Shape is [1, 8400, 7] -> transpose to [7, 8400]
+                output = output_tensor[0].T
+        else:
+            # Handle squeeze/unsqueeze if output has different dimensions
+            output = output_tensor
+
+        boxes = output[:4, :].T  # [num_boxes, 4] (x_center, y_center, width, height)
+        scores = output[4:, :].T  # [num_boxes, num_classes]
+
+        class_ids = np.argmax(scores, axis=1)
+        confidences = np.max(scores, axis=1)
+
+        mask = confidences >= self.confidence_threshold
+        boxes = boxes[mask]
+        confidences = confidences[mask]
+        class_ids = class_ids[mask]
+
+        nms_boxes = []
+        for box in boxes:
+            x_c, y_c, box_w, box_h = box
+            scale_x = w / net_w
+            scale_y = h / net_h
+
+            x1 = (x_c - box_w / 2) * scale_x
+            y1 = (y_c - box_h / 2) * scale_y
+            box_width = box_w * scale_x
+            box_height = box_h * scale_y
+            nms_boxes.append([float(x1), float(y1), float(box_width), float(box_height)])
+
+        indices = nms(
+            nms_boxes,
+            confidences.tolist(),
+            self.iou_threshold,
+        )
+
+        detections = []
+        if len(indices) > 0:
+            for idx in indices:
+                x1, y1, box_width, box_height = nms_boxes[idx]
+                x2 = x1 + box_width
+                y2 = y1 + box_height
+                class_id = int(class_ids[idx])
+                conf = float(confidences[idx])
+                label = self.class_names.get(class_id, str(class_id))
+                detections.append(
+                    Detection(
+                        class_id=class_id,
+                        label=label,
+                        confidence=conf,
+                        xyxy=(x1, y1, x2, y2),
+                    )
+                )
+        return detections
 
     def _predict_ultralytics(self, frame: np.ndarray) -> list[Detection]:
         results = self.model.predict(
