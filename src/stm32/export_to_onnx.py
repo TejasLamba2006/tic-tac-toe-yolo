@@ -20,8 +20,12 @@ def export_onnx_model(weights_path: str | Path, output_path: str | Path | None =
             "Ultralytics is required to export ONNX models") from exc
 
     model = YOLO(str(weights))
-    exported = model.export(format="onnx", imgsz=imgsz,
-                            opset=opset, simplify=True)
+    exported = model.export(
+        format="onnx",
+        imgsz=imgsz,
+        opset=opset,
+        simplify=False
+    )
     exported_path = Path(str(exported))
 
     if output_path is None:
@@ -41,9 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Path to the trained .pt weights")
     parser.add_argument("--output", default=None,
                         help="Destination .onnx file")
-    parser.add_argument("--imgsz", type=int, default=640,
-                        help="Export image size")
-    parser.add_argument("--opset", type=int, default=13,
+    parser.add_argument("--opset", type=int, default=12,
                         help="ONNX opset version")
     return parser
 
@@ -52,7 +54,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     onnx_path = export_onnx_model(
-        args.weights, args.output, imgsz=args.imgsz, opset=args.opset)
+        args.weights, args.output, imgsz=320, opset=args.opset)
     print(onnx_path)
     return 0
 
