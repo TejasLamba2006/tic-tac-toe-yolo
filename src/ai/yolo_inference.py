@@ -385,11 +385,20 @@ class YoloInference:
         output = _select_yolo_output(output_tensor)
         boxes = output[:4, :].T  # [num_boxes, 4] (x_center, y_center, width, height)
         scores = output[4:, :].T  # [num_boxes, num_classes]
+        coordinate_scale_x = frame_width / net_width
+        coordinate_scale_y = frame_height / net_height
+        if boxes.size > 0 and float(np.nanmax(np.abs(boxes))) <= 2.0:
+            coordinate_scale_x = frame_width
+            coordinate_scale_y = frame_height
 
         class_ids = np.argmax(scores, axis=1)
         confidences = np.max(scores, axis=1)
 
         if os.environ.get("YOLO_DEBUG"):
+            print(
+                f"[YOLO_DEBUG] coordinate_scale_x={coordinate_scale_x:.6f} "
+                f"coordinate_scale_y={coordinate_scale_y:.6f}"
+            )
             print("[YOLO_DEBUG] decoded candidates before threshold:")
             for index in np.argsort(confidences)[::-1][:20]:
                 print(
@@ -405,13 +414,11 @@ class YoloInference:
         nms_boxes = []
         for box in boxes:
             x_c, y_c, box_w, box_h = box
-            scale_x = frame_width / net_width
-            scale_y = frame_height / net_height
 
-            x1 = (x_c - box_w / 2) * scale_x
-            y1 = (y_c - box_h / 2) * scale_y
-            x2 = (x_c + box_w / 2) * scale_x
-            y2 = (y_c + box_h / 2) * scale_y
+            x1 = (x_c - box_w / 2) * coordinate_scale_x
+            y1 = (y_c - box_h / 2) * coordinate_scale_y
+            x2 = (x_c + box_w / 2) * coordinate_scale_x
+            y2 = (y_c + box_h / 2) * coordinate_scale_y
             nms_boxes.append([float(x1), float(y1), float(x2), float(y2)])
 
         indices = nms(
