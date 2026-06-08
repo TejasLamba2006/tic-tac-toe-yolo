@@ -15,7 +15,7 @@ def _export_from_pt(weights_path: Path, destination: Path, imgsz: int) -> Path:
             "Ultralytics is required to export TFLite models from PyTorch weights") from exc
 
     model = YOLO(str(weights_path))
-    exported = model.export(format="tflite", imgsz=imgsz, simplify=True)
+    exported = model.export(format="tflite", imgsz=imgsz, simplify=True, int8=True, data="data.yaml")
     exported_path = Path(str(exported))
 
     if exported_path.is_dir():
