@@ -8,7 +8,7 @@ python3 -m src.main \
 
 
 python3 -m src.main \
-  --weights quantized_models/tictactoe_yolov8_quant_pc_uf_od_tictactoe.tflite \
+  --weights runs/detect/train-5/weights/best_saved_model/best_int8.tflite \
   --camera usb \
   --gui opencv \
   --npu
