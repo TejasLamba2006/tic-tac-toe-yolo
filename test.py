@@ -1,9 +1,7 @@
-import tflite_runtime.interpreter as tflite
-import numpy as np
-import cv2
+from __future__ import annotations
 
-interp = tflite.Interpreter(
-    'runs/detect/train-5/weights/best_saved_model/best_int8.tflite')
-interp.allocate_tensors()
-print('Input:', interp.get_input_details()[0])
-print('Output:', interp.get_output_details()[0])
+from scripts.diagnose_yolo_tflite import main
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

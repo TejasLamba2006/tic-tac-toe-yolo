@@ -30,20 +30,32 @@ def opponent(player: str) -> str:
 def check_winner(board: Sequence[Sequence[str]]) -> str | None:
     """Return the winning player symbol or ``None`` if the game is still open."""
 
-    lines = []
-    lines.extend(board)
-    lines.extend([[board[row][col] for row in range(3)] for col in range(3)])
-    lines.append([board[i][i] for i in range(3)])
-    lines.append([board[i][2 - i] for i in range(3)])
-
-    for symbol in ("R", "Y"):
-        if any(all(cell == symbol for cell in line) for line in lines):
-            return symbol
+    b = board
+    if b[0][0] != "E" and b[0][0] == b[0][1] == b[0][2]:
+        return b[0][0]
+    if b[1][0] != "E" and b[1][0] == b[1][1] == b[1][2]:
+        return b[1][0]
+    if b[2][0] != "E" and b[2][0] == b[2][1] == b[2][2]:
+        return b[2][0]
+    if b[0][0] != "E" and b[0][0] == b[1][0] == b[2][0]:
+        return b[0][0]
+    if b[0][1] != "E" and b[0][1] == b[1][1] == b[2][1]:
+        return b[0][1]
+    if b[0][2] != "E" and b[0][2] == b[1][2] == b[2][2]:
+        return b[0][2]
+    if b[0][0] != "E" and b[0][0] == b[1][1] == b[2][2]:
+        return b[0][0]
+    if b[0][2] != "E" and b[0][2] == b[1][1] == b[2][0]:
+        return b[0][2]
     return None
 
 
 def is_draw(board: Sequence[Sequence[str]]) -> bool:
-    return check_winner(board) is None and all(cell != "E" for row in board for cell in row)
+    for row in board:
+        for cell in row:
+            if cell == "E":
+                return False
+    return check_winner(board) is None
 
 
 def _ordered_moves(board: Sequence[Sequence[str]]):
@@ -117,15 +129,17 @@ def find_best_move(board: Board, ai_player: str = "Y") -> MoveRecommendation | N
     human_player = opponent(ai_player)
     best_score = -inf
     best_move: tuple[int, int] | None = None
+    alpha = -inf
 
     for row, col in _ordered_moves(board):
         board[row][col] = ai_player
-        score = minimax(board, 0, False, ai_player, human_player)
+        score = minimax(board, 0, False, ai_player, human_player, alpha, inf)
         board[row][col] = "E"
 
         if score > best_score or (score == best_score and best_move is not None and (row, col) < best_move):
             best_score = score
             best_move = (row, col)
+        alpha = max(alpha, best_score)
 
     if best_move is None:
         return None

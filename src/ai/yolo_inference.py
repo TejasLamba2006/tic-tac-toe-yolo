@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import time
 
 import cv2
 import numpy as np
@@ -50,6 +51,41 @@ def nms(boxes, scores, iou_threshold=0.45):
     return keep
 
 
+def _as_numpy_dtype(dtype) -> np.dtype:
+    return np.dtype(dtype)
+
+
+def _is_float_dtype(dtype) -> bool:
+    return np.issubdtype(_as_numpy_dtype(dtype), np.floating)
+
+
+def _select_yolo_output(output_tensor: np.ndarray) -> np.ndarray:
+    if output_tensor.ndim == 3:
+        if output_tensor.shape[1] < output_tensor.shape[2]:
+            return output_tensor[0]
+        return output_tensor[0].T
+    return output_tensor
+
+
+def _debug_tensor(prefix: str, tensor: np.ndarray) -> None:
+    if not os.environ.get("YOLO_DEBUG"):
+        return
+    print(
+        f"[YOLO_DEBUG] {prefix}: shape={tensor.shape} dtype={tensor.dtype} "
+        f"min={float(np.min(tensor)):.6f} max={float(np.max(tensor)):.6f}"
+    )
+    print(f"[YOLO_DEBUG] {prefix} first20={tensor.flatten()[:20]}")
+    if tensor.ndim == 3:
+        for channel_index in range(tensor.shape[1]):
+            channel = tensor[0, channel_index, :]
+            print(
+                f"[YOLO_DEBUG] {prefix} ch{channel_index}: "
+                f"min={float(channel.min()):.6f} "
+                f"max={float(channel.max()):.6f} "
+                f"mean={float(channel.mean()):.6f}"
+            )
+
+
 class YoloInference:
     """Thin wrapper around Ultralytics YOLO and TFLite inference.
 
@@ -76,6 +112,7 @@ class YoloInference:
         self.image_size = image_size
         self.device = device
         self.use_npu = use_npu
+        self.last_model_run_ms: float | None = None
 
         suffix = self.weights_path.suffix.lower()
         if suffix == ".tflite":
@@ -232,69 +269,15 @@ class YoloInference:
         input_data = np.expand_dims(input_data, axis=0)
 
         # Run inference
+        start = time.perf_counter()
         outputs = self.session.run(None, {self.input_name: input_data})
+        self.last_model_run_ms = (time.perf_counter() - start) * 1000.0
         output_tensor = outputs[0]
 
-        # Post-process (same as TFLite)
-        output_shape = output_tensor.shape
-        if len(output_shape) == 3:
-            if output_shape[1] < output_shape[2]:
-                # Shape is [1, 7, 8400] -> transpose to [7, 8400]
-                output = output_tensor[0]
-            else:
-                # Shape is [1, 8400, 7] -> transpose to [7, 8400]
-                output = output_tensor[0].T
-        else:
-            # Handle squeeze/unsqueeze if output has different dimensions
-            output = output_tensor
+        _debug_tensor("onnx_input", input_data)
+        _debug_tensor("onnx_output", output_tensor)
+        return self._decode_yolo_output(output_tensor, w, h, net_w, net_h)
 
-        boxes = output[:4, :].T  # [num_boxes, 4] (x_center, y_center, width, height)
-        scores = output[4:, :].T  # [num_boxes, num_classes]
-
-        class_ids = np.argmax(scores, axis=1)
-        confidences = np.max(scores, axis=1)
-
-        mask = confidences >= self.confidence_threshold
-        boxes = boxes[mask]
-        confidences = confidences[mask]
-        class_ids = class_ids[mask]
-
-        nms_boxes = []
-        for box in boxes:
-            x_c, y_c, box_w, box_h = box
-            scale_x = w / net_w
-            scale_y = h / net_h
-
-            x1 = (x_c - box_w / 2) * scale_x
-            y1 = (y_c - box_h / 2) * scale_y
-            box_width = box_w * scale_x
-            box_height = box_h * scale_y
-            nms_boxes.append([float(x1), float(y1), float(box_width), float(box_height)])
-
-        indices = nms(
-            nms_boxes,
-            confidences.tolist(),
-            self.iou_threshold,
-        )
-
-        detections = []
-        if len(indices) > 0:
-            for idx in indices:
-                x1, y1, box_width, box_height = nms_boxes[idx]
-                x2 = x1 + box_width
-                y2 = y1 + box_height
-                class_id = int(class_ids[idx])
-                conf = float(confidences[idx])
-                label = self.class_names.get(class_id, str(class_id))
-                detections.append(
-                    Detection(
-                        class_id=class_id,
-                        label=label,
-                        confidence=conf,
-                        xyxy=(x1, y1, x2, y2),
-                    )
-                )
-        return detections
     def _predict_nb(self, frame: np.ndarray) -> list[Detection]:
         h, w = frame.shape[:2]
 
@@ -312,10 +295,10 @@ class YoloInference:
         rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
 
         input_dtype = self.input_tensor_infos[0].get_dtype()
-        if input_dtype == np.float32:
+        if _is_float_dtype(input_dtype):
             input_data = rgb.astype(np.float32) / 255.0
         else:
-            input_data = rgb.astype(input_dtype)
+            input_data = rgb.astype(_as_numpy_dtype(input_dtype))
 
         if is_bchw:
             input_data = np.transpose(input_data, (2, 0, 1))
@@ -324,73 +307,19 @@ class YoloInference:
 
         # Run inference
         self.stai_mpu_model.set_input(0, input_data)
+        start = time.perf_counter()
         self.stai_mpu_model.run()
+        self.last_model_run_ms = (time.perf_counter() - start) * 1000.0
 
         # Retrieve output
         output_tensor = self.stai_mpu_model.get_output(index=0)
 
-        # Post-process (same as TFLite / ONNX)
-        output_shape = output_tensor.shape
-        if len(output_shape) == 3:
-            if output_shape[1] < output_shape[2]:
-                # Shape is [1, 7, 8400] -> transpose to [7, 8400]
-                output = output_tensor[0]
-            else:
-                # Shape is [1, 8400, 7] -> transpose to [7, 8400]
-                output = output_tensor[0].T
-        else:
-            # Handle squeeze/unsqueeze if output has different dimensions
-            output = output_tensor
-
-        boxes = output[:4, :].T  # [num_boxes, 4] (x_center, y_center, width, height)
-        scores = output[4:, :].T  # [num_boxes, num_classes]
-
-        class_ids = np.argmax(scores, axis=1)
-        confidences = np.max(scores, axis=1)
-
-        mask = confidences >= self.confidence_threshold
-        boxes = boxes[mask]
-        confidences = confidences[mask]
-        class_ids = class_ids[mask]
-
-        nms_boxes = []
-        for box in boxes:
-            x_c, y_c, box_w, box_h = box
-            scale_x = w / net_w
-            scale_y = h / net_h
-
-            x1 = (x_c - box_w / 2) * scale_x
-            y1 = (y_c - box_h / 2) * scale_y
-            box_width = box_w * scale_x
-            box_height = box_h * scale_y
-            nms_boxes.append([float(x1), float(y1), float(box_width), float(box_height)])
-
-        indices = nms(
-            nms_boxes,
-            confidences.tolist(),
-            self.iou_threshold,
-        )
-
-        detections = []
-        if len(indices) > 0:
-            for idx in indices:
-                x1, y1, box_width, box_height = nms_boxes[idx]
-                x2 = x1 + box_width
-                y2 = y1 + box_height
-                class_id = int(class_ids[idx])
-                conf = float(confidences[idx])
-                label = self.class_names.get(class_id, str(class_id))
-                detections.append(
-                    Detection(
-                        class_id=class_id,
-                        label=label,
-                        confidence=conf,
-                        xyxy=(x1, y1, x2, y2),
-                    )
-                )
-        return detections
+        _debug_tensor("nb_input", input_data)
+        _debug_tensor("nb_output", output_tensor)
+        return self._decode_yolo_output(output_tensor, w, h, net_w, net_h)
 
     def _predict_ultralytics(self, frame: np.ndarray) -> list[Detection]:
+        start = time.perf_counter()
         results = self.model.predict(
             frame,
             conf=self.confidence_threshold,
@@ -399,6 +328,7 @@ class YoloInference:
             device=self.device,
             verbose=False,
         )
+        self.last_model_run_ms = (time.perf_counter() - start) * 1000.0
         if not results:
             return []
         return self._parse_result(results[0])
@@ -422,10 +352,10 @@ class YoloInference:
         rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
 
         input_dtype = self.input_details[0]['dtype']
-        if input_dtype == np.float32:
+        if _is_float_dtype(input_dtype):
             input_data = rgb.astype(np.float32) / 255.0
         else:
-            input_data = rgb.astype(input_dtype)
+            input_data = rgb.astype(_as_numpy_dtype(input_dtype))
 
         if is_bchw:
             input_data = np.transpose(input_data, (2, 0, 1))
@@ -434,27 +364,38 @@ class YoloInference:
 
         # Run inference
         self.interpreter.set_tensor(self.input_details[0]['index'], input_data)
+        start = time.perf_counter()
         self.interpreter.invoke()
+        self.last_model_run_ms = (time.perf_counter() - start) * 1000.0
 
         # Retrieve and transpose output
         output_tensor = self.interpreter.get_tensor(self.output_details[0]['index'])
-        output_shape = output_tensor.shape
-        if len(output_shape) == 3:
-            if output_shape[1] < output_shape[2]:
-                # Shape is [1, 7, 8400] -> transpose to [7, 8400]
-                output = output_tensor[0]
-            else:
-                # Shape is [1, 8400, 7] -> transpose to [7, 8400]
-                output = output_tensor[0].T
-        else:
-            # Handle squeeze/unsqueeze if output has different dimensions
-            output = output_tensor
+        _debug_tensor("tflite_input", input_data)
+        _debug_tensor("tflite_output", output_tensor)
+        return self._decode_yolo_output(output_tensor, w, h, net_w, net_h)
 
+    def _decode_yolo_output(
+        self,
+        output_tensor: np.ndarray,
+        frame_width: int,
+        frame_height: int,
+        net_width: int,
+        net_height: int,
+    ) -> list[Detection]:
+        output = _select_yolo_output(output_tensor)
         boxes = output[:4, :].T  # [num_boxes, 4] (x_center, y_center, width, height)
         scores = output[4:, :].T  # [num_boxes, num_classes]
 
         class_ids = np.argmax(scores, axis=1)
         confidences = np.max(scores, axis=1)
+
+        if os.environ.get("YOLO_DEBUG"):
+            print("[YOLO_DEBUG] decoded candidates before threshold:")
+            for index in np.argsort(confidences)[::-1][:20]:
+                print(
+                    f"[YOLO_DEBUG] idx={int(index)} class={int(class_ids[index])} "
+                    f"conf={float(confidences[index]):.6f} box={boxes[index]}"
+                )
 
         mask = confidences >= self.confidence_threshold
         boxes = boxes[mask]
@@ -464,14 +405,14 @@ class YoloInference:
         nms_boxes = []
         for box in boxes:
             x_c, y_c, box_w, box_h = box
-            scale_x = w / net_w
-            scale_y = h / net_h
+            scale_x = frame_width / net_width
+            scale_y = frame_height / net_height
 
             x1 = (x_c - box_w / 2) * scale_x
             y1 = (y_c - box_h / 2) * scale_y
-            box_width = box_w * scale_x
-            box_height = box_h * scale_y
-            nms_boxes.append([float(x1), float(y1), float(box_width), float(box_height)])
+            x2 = (x_c + box_w / 2) * scale_x
+            y2 = (y_c + box_h / 2) * scale_y
+            nms_boxes.append([float(x1), float(y1), float(x2), float(y2)])
 
         indices = nms(
             nms_boxes,
@@ -482,9 +423,7 @@ class YoloInference:
         detections = []
         if len(indices) > 0:
             for idx in indices:
-                x1, y1, box_width, box_height = nms_boxes[idx]
-                x2 = x1 + box_width
-                y2 = y1 + box_height
+                x1, y1, x2, y2 = nms_boxes[idx]
                 class_id = int(class_ids[idx])
                 conf = float(confidences[idx])
                 label = self.class_names.get(class_id, str(class_id))
@@ -495,6 +434,13 @@ class YoloInference:
                         confidence=conf,
                         xyxy=(x1, y1, x2, y2),
                     )
+                )
+        if os.environ.get("YOLO_DEBUG"):
+            print(f"[YOLO_DEBUG] detections after nms={len(detections)}")
+            for detection in detections[:20]:
+                print(
+                    f"[YOLO_DEBUG] det label={detection.label} "
+                    f"conf={detection.confidence:.6f} xyxy={detection.xyxy}"
                 )
         return detections
 

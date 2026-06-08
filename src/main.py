@@ -47,6 +47,9 @@ class FrameAnalysis:
     observation: BoardObservation
     decision: MoveDecision
     inference_ms: float
+    model_run_ms: float | None
+    move_ms: float
+    analysis_ms: float
     fps: float
     detections: tuple[Detection, ...]
 
@@ -145,7 +148,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--ai-color", default="Y",
                         choices=("R", "Y"), help="Which player the AI controls")
-    parser.add_argument("--board-size", type=int, default=640,
+    parser.add_argument("--board-size", type=int, default=320,
                         help="Canonical warped board size in pixels")
     parser.add_argument("--frame-width", type=int,
                         default=1280, help="Requested capture width")
@@ -159,7 +162,7 @@ def build_parser() -> argparse.ArgumentParser:
                         default=0.15, help="Minimum confidence required for a cell to stay in the matrix")
     parser.add_argument("--iou-threshold", type=float,
                         default=0.45, help="YOLO IoU threshold")
-    parser.add_argument("--image-size", type=int, default=640,
+    parser.add_argument("--image-size", type=int, default=320,
                         help="YOLO inference image size")
     parser.add_argument("--smoothing-window", type=int,
                         default=5, help="Board-state history window used for stabilization")
@@ -190,9 +193,11 @@ def analyze_frame(
     transform = board_result.build_transform(board_size)
     warped_frame = warp_image(frame, transform)
 
-    start = time.perf_counter()
+    analysis_start = time.perf_counter()
+    infer_start = time.perf_counter()
     # cv2.imwrite("debug_warped.jpg", warped_frame)
     detections = detector.predict(warped_frame)
+    infer_ms = (time.perf_counter() - infer_start) * 1000.0
     # print("\nRAW DETECTIONS")
 
     # for d in detections:
@@ -202,9 +207,11 @@ def analyze_frame(
     #         f"{d.xyxy}"
     #     )
     observation = board_estimator.estimate(warped_frame, detections)
+    move_start = time.perf_counter()
     decision = recommend_move(observation.board, ai_player=ai_color)
-    elapsed_ms = (time.perf_counter() - start) * 1000.0
-    fps = 1000.0 / elapsed_ms if elapsed_ms > 0 else 0.0
+    move_ms = (time.perf_counter() - move_start) * 1000.0
+    analysis_ms = (time.perf_counter() - analysis_start) * 1000.0
+    fps = 1000.0 / analysis_ms if analysis_ms > 0 else 0.0
 
     return FrameAnalysis(
         frame=frame,
@@ -213,7 +220,10 @@ def analyze_frame(
         transform=transform,
         observation=observation,
         decision=decision,
-        inference_ms=elapsed_ms,
+        inference_ms=infer_ms,
+        model_run_ms=getattr(detector, "last_model_run_ms", None),
+        move_ms=move_ms,
+        analysis_ms=analysis_ms,
         fps=fps,
         detections=tuple(detections),
     )
@@ -224,7 +234,7 @@ def _draw_panel(frame: np.ndarray, analysis: FrameAnalysis) -> np.ndarray:
     height, width = rendered.shape[:2]
 
     panel_width = min(400, max(280, width // 3))
-    panel_height = min(220, max(180, height // 4))
+    panel_height = min(height - 24, max(340, height // 2))
     overlay = rendered.copy()
     cv2.rectangle(overlay, (12, 12), (12 + panel_width,
                   12 + panel_height), (18, 18, 18), -1)
@@ -245,7 +255,18 @@ def _draw_panel(frame: np.ndarray, analysis: FrameAnalysis) -> np.ndarray:
     cv2.putText(rendered, f"Model: {analysis.board_result.method}", (
         28, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 220, 220), 1, cv2.LINE_AA)
     y += line_height
-    cv2.putText(rendered, f"Inference: {analysis.inference_ms:.1f} ms", (
+    model_ms = analysis.model_run_ms
+    model_time = f"{model_ms:.1f} ms" if model_ms is not None else "n/a"
+    cv2.putText(rendered, f"Predict: {analysis.inference_ms:.1f} ms", (
+        28, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 220, 220), 1, cv2.LINE_AA)
+    y += line_height
+    cv2.putText(rendered, f"Model run: {model_time}", (
+        28, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 220, 220), 1, cv2.LINE_AA)
+    y += line_height
+    cv2.putText(rendered, f"Move: {analysis.move_ms:.1f} ms", (
+        28, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 220, 220), 1, cv2.LINE_AA)
+    y += line_height
+    cv2.putText(rendered, f"Frame AI: {analysis.analysis_ms:.1f} ms", (
         28, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 220, 220), 1, cv2.LINE_AA)
     y += line_height
     cv2.putText(rendered, f"Detections: {len(analysis.detections)}", (
