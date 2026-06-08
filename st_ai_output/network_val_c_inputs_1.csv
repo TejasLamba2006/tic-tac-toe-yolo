@@ -1,0 +1,5 @@
+# file created : 2026-06-08 11:03:03
+# dtype=float32
+# c-model features - 20/20
+# (20, 3, 320, 320)/float32, min/max=[0.000000, 1.000000], mean/std=[0.405113, 0.262338], images
+# Note: w/o data, number of item by sample is exceeded: 307200 > 512

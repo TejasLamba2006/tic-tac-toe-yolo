@@ -1,0 +1,5 @@
+# file created : 2026-06-08 11:03:03
+# dtype=float32
+# c-model features - 20/20
+# (20, 7, 1, 2100)/float32, min/max=[0.000000, 1.711955], mean/std=[0.212777, 0.269472], output0_Transpose_0
+# Note: w/o data, number of item by sample is exceeded: 14700 > 512
