@@ -1,1 +1,7 @@
 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
+
+python3 -m src.main \
+  --weights runs/detect/train-5/weights/best.onnx \
+  --camera usb \
+  --gui opencv \
+  --npu
