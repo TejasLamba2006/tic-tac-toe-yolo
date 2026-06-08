@@ -294,6 +294,7 @@ class YoloInference:
                         xyxy=(x1, y1, x2, y2),
                     )
                 )
+        return detections
     def _predict_nb(self, frame: np.ndarray) -> list[Detection]:
         h, w = frame.shape[:2]
 
