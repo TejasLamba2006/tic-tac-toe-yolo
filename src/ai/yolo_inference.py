@@ -225,10 +225,9 @@ class YoloInference:
             box_height = box_h * scale_y
             nms_boxes.append([float(x1), float(y1), float(box_width), float(box_height)])
 
-        indices = cv2.dnn.NMSBoxes(
+        indices = nms(
             nms_boxes,
             confidences.tolist(),
-            self.confidence_threshold,
             self.iou_threshold,
         )
 
