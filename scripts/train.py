@@ -6,7 +6,7 @@ if __name__ == "__main__":
     model.train(
         data="data.yaml",
         epochs=100,
-        imgsz=640,
+        imgsz=320,
         batch=4,
         workers=0
     )
