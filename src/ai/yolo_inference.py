@@ -84,6 +84,9 @@ class YoloInference:
         elif suffix == ".onnx":
             self.model_type = "onnx"
             self._init_onnx()
+        elif suffix == ".nb":
+            self.model_type = "nb"
+            self._init_nb()
         else:
             self.model_type = "ultralytics"
             self._init_ultralytics()
@@ -159,6 +162,25 @@ class YoloInference:
         except Exception:
             pass
 
+    def _init_nb(self) -> None:
+        try:
+            from stai_mpu import stai_mpu_network
+        except ImportError as exc:
+            raise RuntimeError(
+                "stai_mpu library is required for running native .nb models on the board."
+            ) from exc
+
+        # Initialize the network binary model
+        self.stai_mpu_model = stai_mpu_network(
+            model_path=str(self.weights_path),
+            use_hw_acceleration=self.use_npu
+        )
+        self.input_tensor_infos = self.stai_mpu_model.get_input_infos()
+        self.input_shape = self.input_tensor_infos[0].get_shape()
+
+        # Tic-tac-toe classes
+        self.class_names = {0: "empty", 1: "red_ball", 2: "yellow_ball"}
+
     def _init_ultralytics(self) -> None:
         try:
             from ultralytics import YOLO
@@ -182,6 +204,8 @@ class YoloInference:
             return self._predict_tflite(frame)
         elif self.model_type == "onnx":
             return self._predict_onnx(frame)
+        elif self.model_type == "nb":
+            return self._predict_nb(frame)
         return self._predict_ultralytics(frame)
 
     def _predict_onnx(self, frame: np.ndarray) -> list[Detection]:
@@ -212,6 +236,99 @@ class YoloInference:
         output_tensor = outputs[0]
 
         # Post-process (same as TFLite)
+        output_shape = output_tensor.shape
+        if len(output_shape) == 3:
+            if output_shape[1] < output_shape[2]:
+                # Shape is [1, 7, 8400] -> transpose to [7, 8400]
+                output = output_tensor[0]
+            else:
+                # Shape is [1, 8400, 7] -> transpose to [7, 8400]
+                output = output_tensor[0].T
+        else:
+            # Handle squeeze/unsqueeze if output has different dimensions
+            output = output_tensor
+
+        boxes = output[:4, :].T  # [num_boxes, 4] (x_center, y_center, width, height)
+        scores = output[4:, :].T  # [num_boxes, num_classes]
+
+        class_ids = np.argmax(scores, axis=1)
+        confidences = np.max(scores, axis=1)
+
+        mask = confidences >= self.confidence_threshold
+        boxes = boxes[mask]
+        confidences = confidences[mask]
+        class_ids = class_ids[mask]
+
+        nms_boxes = []
+        for box in boxes:
+            x_c, y_c, box_w, box_h = box
+            scale_x = w / net_w
+            scale_y = h / net_h
+
+            x1 = (x_c - box_w / 2) * scale_x
+            y1 = (y_c - box_h / 2) * scale_y
+            box_width = box_w * scale_x
+            box_height = box_h * scale_y
+            nms_boxes.append([float(x1), float(y1), float(box_width), float(box_height)])
+
+        indices = nms(
+            nms_boxes,
+            confidences.tolist(),
+            self.iou_threshold,
+        )
+
+        detections = []
+        if len(indices) > 0:
+            for idx in indices:
+                x1, y1, box_width, box_height = nms_boxes[idx]
+                x2 = x1 + box_width
+                y2 = y1 + box_height
+                class_id = int(class_ids[idx])
+                conf = float(confidences[idx])
+                label = self.class_names.get(class_id, str(class_id))
+                detections.append(
+                    Detection(
+                        class_id=class_id,
+                        label=label,
+                        confidence=conf,
+                        xyxy=(x1, y1, x2, y2),
+                    )
+                )
+    def _predict_nb(self, frame: np.ndarray) -> list[Detection]:
+        h, w = frame.shape[:2]
+
+        input_shape = self.input_shape
+        if input_shape[1] == 3 or input_shape[1] == 1:
+            # NCHW
+            net_h, net_w = input_shape[2], input_shape[3]
+            is_bchw = True
+        else:
+            # NHWC
+            net_h, net_w = input_shape[1], input_shape[2]
+            is_bchw = False
+
+        resized = cv2.resize(frame, (net_w, net_h), interpolation=cv2.INTER_LINEAR)
+        rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+
+        input_dtype = self.input_tensor_infos[0].get_dtype()
+        if input_dtype == np.float32:
+            input_data = rgb.astype(np.float32) / 255.0
+        else:
+            input_data = rgb.astype(input_dtype)
+
+        if is_bchw:
+            input_data = np.transpose(input_data, (2, 0, 1))
+
+        input_data = np.expand_dims(input_data, axis=0)
+
+        # Run inference
+        self.stai_mpu_model.set_input(0, input_data)
+        self.stai_mpu_model.run()
+
+        # Retrieve output
+        output_tensor = self.stai_mpu_model.get_output(index=0)
+
+        # Post-process (same as TFLite / ONNX)
         output_shape = output_tensor.shape
         if len(output_shape) == 3:
             if output_shape[1] < output_shape[2]:
