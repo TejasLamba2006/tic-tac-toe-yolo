@@ -233,7 +233,7 @@ class YoloInference:
 
         detections = []
         if len(indices) > 0:
-            for idx in indices.flatten():
+            for idx in indices:
                 x1, y1, box_width, box_height = nms_boxes[idx]
                 x2 = x1 + box_width
                 y2 = y1 + box_height
