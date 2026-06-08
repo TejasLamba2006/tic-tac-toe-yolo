@@ -5,3 +5,10 @@ python3 -m src.main \
   --camera usb \
   --gui opencv \
   --npu
+
+
+python3 -m src.main \
+  --weights runs/detect/train-5/weights/best_PerChannel_quant_random_2.onnx \
+  --camera usb \
+  --gui opencv \
+  --npu
