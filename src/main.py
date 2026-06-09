@@ -10,8 +10,7 @@ from typing import Sequence
 import cv2
 import numpy as np
 
-from .ai.minimax import check_winner, is_draw
-from .ai.move_selector import MoveDecision, recommend_move
+
 from .ai.yolo_inference import YoloInference
 from .vision.board_detector import BoardDetectionResult, BoardDetector
 from .vision.board_state import BoardObservation, BoardStateEstimator, Detection, format_board
@@ -64,7 +63,6 @@ class FrameAnalysis:
     board_result: BoardDetectionResult
     transform: PerspectiveTransform
     observation: BoardObservation
-    decision: MoveDecision
     inference_ms: float
     model_run_ms: float | None
     move_ms: float
@@ -234,7 +232,6 @@ def analyze_frame(
     board_signature = tuple(tuple(row) for row in observation.board)
     if board_signature != _cache[0]:
         _cache[0] = board_signature
-        _cache[1] = recommend_move(observation.board, ai_player=ai_color)
     decision: MoveDecision = _cache[1]  # type: ignore[assignment]
     move_ms = (time.perf_counter() - move_start) * 1000.0
     analysis_ms = (time.perf_counter() - analysis_start) * 1000.0
@@ -246,7 +243,6 @@ def analyze_frame(
         board_result=board_result,
         transform=transform,
         observation=observation,
-        decision=decision,
         inference_ms=infer_ms,
         model_run_ms=getattr(detector, "last_model_run_ms", None),
         move_ms=move_ms,
@@ -275,7 +271,8 @@ def _draw_panel(
     # Status label in the top-right corner
     status_text = "GAME OVER" if game_over else "LIVE"
     status_color = (0, 0, 255) if game_over else (0, 255, 0)
-    (st_w, st_h), _ = cv2.getTextSize(status_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+    (st_w, st_h), _ = cv2.getTextSize(
+        status_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
     cv2.putText(
         rendered,
         status_text,
@@ -320,31 +317,6 @@ def _draw_panel(
         28, y), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 220, 220), 1, cv2.LINE_AA)
     y += line_height
 
-    if analysis.decision.recommendation is not None:
-        move = analysis.decision.recommendation
-        move_lines = [
-            "Best Move",
-            f"row={move.row}",
-            f"col={move.col}",
-        ]
-    else:
-        move_lines = ["Best Move", analysis.decision.message]
-
-    for text in move_lines:
-        cv2.putText(rendered, text, (28, y), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6, (255, 190, 90), 2, cv2.LINE_AA)
-        y += line_height
-
-    if not game_over and analysis.decision.recommendation is not None:
-        polygon = canonical_cell_polygon(
-            analysis.decision.recommendation.row,
-            analysis.decision.recommendation.col,
-            analysis.transform.size[0],
-        )
-        projected = warp_points(polygon, analysis.transform.inverse_matrix)
-        cv2.polylines(rendered, [projected.astype(
-            np.int32)], True, (0, 255, 255), 3, cv2.LINE_AA)
-
     if not analysis.board_result.fallback:
         cv2.polylines(rendered, [analysis.board_result.corners.astype(
             np.int32)], True, (0, 160, 255), 2, cv2.LINE_AA)
@@ -361,7 +333,8 @@ def _draw_panel(
         rect_x2 = 5 * width // 6
 
         overlay_go = rendered.copy()
-        cv2.rectangle(overlay_go, (rect_x1, rect_y1), (rect_x2, rect_y2), (18, 18, 18), -1)
+        cv2.rectangle(overlay_go, (rect_x1, rect_y1),
+                      (rect_x2, rect_y2), (18, 18, 18), -1)
         cv2.addWeighted(overlay_go, 0.55, rendered, 0.45, 0, rendered)
 
         # Large centered text: "Winner: R" / "Winner: Y" / "Draw!"
@@ -493,26 +466,13 @@ def run_app(config: AppConfig) -> int:
 
             # Detect game-over state
             board = analysis.observation.board
-            winner_symbol = check_winner(board)
-            if winner_symbol is not None:
-                game_over = True
-                winner = winner_symbol
-            elif is_draw(board):
-                game_over = True
-                winner = "Draw"
-            else:
-                game_over = False
-                winner = None
 
-            rendered = _draw_panel(frame, analysis, game_over=game_over, winner=winner)
             signature = tuple(tuple(row) for row in analysis.observation.board)
             if signature != last_signature:
                 last_signature = signature
                 print(format_board(analysis.observation.board))
-                print(analysis.decision.message)
 
             if display_enabled:
-                cv2.imshow(window_name, rendered)
                 key = cv2.waitKey(1) & 0xFF
                 if key in (27, ord("q")):
                     break
