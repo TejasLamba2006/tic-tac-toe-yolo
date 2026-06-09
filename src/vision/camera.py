@@ -55,6 +55,7 @@ def _camera_backend(source: CameraSource) -> int:
 
 
 def _open_single_source(source: CameraSource) -> CameraSession | None:
+    print(f"Trying camera: {source}")
     backend = _camera_backend(source)
     capture = cv2.VideoCapture(
         source, backend) if backend != cv2.CAP_ANY else cv2.VideoCapture(source)
@@ -68,6 +69,7 @@ def _open_single_source(source: CameraSource) -> CameraSession | None:
         return None
 
     capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    print(f"SUCCESS: {source}")
     return CameraSession(capture=capture, source=source, backend=backend)
 
 
@@ -143,7 +145,9 @@ def open_camera(source: CameraSource, auto_max_index: int = 10) -> CameraSession
     if resolved == "auto":
         for candidate in _auto_candidates(auto_max_index):
             session = _open_single_source(candidate)
+
             if session is not None:
+                print(f"Selected camera: {candidate}")
                 return session
         raise RuntimeError("No working camera source was found")
 
