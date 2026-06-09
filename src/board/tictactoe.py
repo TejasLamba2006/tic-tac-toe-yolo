@@ -39,6 +39,13 @@ from vision import (
 )
 from game_logic import TicTacToeGame, validate_board
 
+# Import new pipeline modules
+from src.main import analyze_frame, _draw_panel
+from src.vision.board_detector import BoardDetector
+from src.vision.board_state import BoardStateEstimator
+from src.vision.stability import BoardGeometryTracker
+from src.ai.minimax import check_winner, is_draw
+
 
 # ---------------------------------------------------------------------------
 # App
@@ -65,6 +72,12 @@ class TicTacToeApp:
             smoothing_window      = cfg.smoothing,
             use_npu               = cfg.npu,
         )
+        self.board_detector = BoardDetector()
+        self.board_estimator = BoardStateEstimator(
+            minimum_confidence=cfg.confidence,
+            smoothing_window=cfg.smoothing,
+        )
+        self.geometry_tracker = BoardGeometryTracker()
         self.cam_ctrl  = camera_controller.CameraController(cfg.width, cfg.height)
         self.game      = TicTacToeGame(user_sym=self.user_sym, ai_sym=self.ai_sym)
 
@@ -159,16 +172,25 @@ class TicTacToeApp:
             if frame is None:
                 continue
 
-            # ---- YOLO inference ----------------------------------------
-            detections, raw_board = self.vision.run_inference(frame)
-            # Apply user's board-rotation preference
+            # ---- YOLO inference and Perspective Warping -----------------
+            analysis = analyze_frame(
+                frame=frame,
+                detector=self.vision.yolo,
+                board_detector=self.board_detector,
+                board_estimator=self.board_estimator,
+                ai_color=self.ai_sym,
+                board_size=320,
+                geometry_tracker=self.geometry_tracker,
+            )
+
+            # Retrieve detections and raw board
+            detections = analysis.detections
+            raw_board = [row[:] for row in analysis.observation.board]
             raw_board = self._rotate_board(raw_board)
 
             if self.mode == 2:
-                # ---- Calibration Mode ----------------------------------
-                centroids = [det.center for det in detections if det.label in ("red_ball", "yellow_ball")]
-                calibrated = self.vision.calibrate_grid(centroids)
-                if calibrated:
+                # ---- Calibration Mode (Checking BoardDetector stability) ----
+                if analysis.board_result.found and not analysis.board_result.fallback:
                     self._calibration_stable_count += 1
                 else:
                     self._calibration_stable_count = max(0, self._calibration_stable_count - 1)
@@ -176,7 +198,7 @@ class TicTacToeApp:
                 if self._calibration_stable_count >= 15:
                     self.mode = 0
                     self._calibration_stable_count = 0
-                    print("[APP] Grid calibration completed and locked in!")
+                    print("[APP] Automatic board detection calibrated and locked in!")
                     comms.send_ui_update("CALIBRATION_DONE")
                 
                 board_stable = False
@@ -203,7 +225,11 @@ class TicTacToeApp:
                         self._process_stable_board(raw_board, manual_mode)
 
                 # ---- Update Minimax suggestion ----------------------------
-                self.game.update_suggestion()
+                if analysis.decision.recommendation is not None:
+                    self.game.suggested_move = (analysis.decision.recommendation.row, analysis.decision.recommendation.col)
+                else:
+                    self.game.suggested_move = None
+                self.game.game_status_msg = analysis.decision.message
 
                 # ---- AI move timing ---------------------------------------
                 self._tick_computer_move()
@@ -212,59 +238,47 @@ class TicTacToeApp:
                 self._tick_ai_confirm(raw_board)
 
                 # ---- Game end check ---------------------------------------
-                self.game.check_game_end()
+                winner_symbol = check_winner(raw_board)
+                if winner_symbol is not None:
+                    self.game.game_over = True
+                    self.game.winner = winner_symbol
+                elif is_draw(raw_board):
+                    self.game.game_over = True
+                    self.game.winner = "Draw"
+                else:
+                    self.game.game_over = False
+                    self.game.winner = None
+
                 self.game.log_status()
 
             # ---- Render -----------------------------------------------
-            display = frame.copy()
             if self.mode == 2:
-                renderer.draw_game_overlay(
-                    display, self.game,
-                    detections=detections,
-                    user_sym=self.user_sym,
-                    ai_sym=self.ai_sym,
-                    grid_centers=self.vision.estimator.grid_centers,
-                    grid_radius=self.vision.estimator.grid_radius,
-                )
+                display = frame.copy()
+                if analysis.board_result.found:
+                    cv2.polylines(display, [analysis.board_result.corners.astype(np.int32)], True, (0, 255, 0), 3, cv2.LINE_AA)
                 renderer.draw_calibration_overlay(
                     display,
                     mode=self.mode,
                     detected_count=len([det for det in detections if det.label in ("red_ball", "yellow_ball")]),
-                    grid_centers=self.vision.estimator.grid_centers,
-                    grid_radius=self.vision.estimator.grid_radius,
+                    grid_centers=None,
+                    grid_radius=0,
                     stable_count=self._calibration_stable_count,
                     required_stable=15,
                 )
             else:
-                renderer.draw_game_overlay(
-                    display, self.game,
-                    detections=detections,
-                    user_sym=self.user_sym,
-                    ai_sym=self.ai_sym,
-                    grid_centers=self.vision.estimator.grid_centers,
-                    grid_radius=self.vision.estimator.grid_radius,
+                display = _draw_panel(
+                    frame,
+                    analysis,
+                    game_over=self.game.game_over,
+                    winner=self.game.winner
                 )
-                renderer.draw_hud(
-                    display, self.game,
-                    fps=self._current_fps,
-                    inference_ms=self.vision.last_inference_ms,
-                    user_sym=self.user_sym,
-                    ai_sym=self.ai_sym,
-                    board_rotation=self._board_rotation,
-                )
-                renderer.draw_win_message(display, self.game)
-                renderer.draw_zoom_pan_info(display, self.cam_ctrl)
-
-                # Stability indicator
-                if not board_stable and not self.game.game_over:
-                    cv2.putText(
-                        display,
-                        f"Stabilising {self._stable_count}/{self.required_stable_frames}...",
-                        (10, display.shape[0] - 40),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.50, (180, 180, 0), 1, cv2.LINE_AA,
-                    )
 
             cv2.imshow(window, display)
+
+            # Stream rendered frame to UI
+            ret, jpeg_bytes = cv2.imencode(".jpg", display, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            if ret:
+                comms.send_ui_frame(jpeg_bytes.tobytes())
 
             # ---- FPS tracking ----------------------------------------
             self._fps_count += 1
@@ -285,7 +299,6 @@ class TicTacToeApp:
             elif key == ord("r"):
                 self._reset_game()
             elif key == ord("b"):
-                # Rotate board 90° CW
                 self._board_rotation = (self._board_rotation + 90) % 360
                 print(f"[APP] Board rotation: {self._board_rotation}°")
             elif key == ord("p"):
@@ -296,7 +309,7 @@ class TicTacToeApp:
                 self._calibration_stable_count = 0
                 print("[APP] Entering Calibration Mode...")
             elif key == ord(" "):
-                if self.mode == 2 and self.vision.estimator.grid_centers:
+                if self.mode == 2:
                     self.mode = 0
                     self._calibration_stable_count = 0
                     print("[APP] Calibration confirmed manually!")
@@ -462,12 +475,14 @@ class TicTacToeApp:
     def _start_ui(self) -> None:
         self._ui_started = True
         try:
+            # Open in binary mode (no encoding) so we can send both text
+            # commands (encoded to bytes) and raw JPEG frame data.
             comms.app = subprocess.Popen(
                 ["python3", "src/board/ui.py"],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                encoding="utf-8",
+                # NOTE: no encoding= here — we manage encoding ourselves
             )
             threading.Thread(
                 target=comms.listen_feedback,

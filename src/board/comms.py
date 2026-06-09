@@ -59,12 +59,12 @@ def send(cmd: str) -> None:
 # ---------------------------------------------------------------------------
 
 def send_ui_update(cmd: str) -> None:
-    """Send a real-time update to the UI subprocess (thread-safe)."""
+    """Send a text command to the UI subprocess (binary stdin, UTF-8 encoded)."""
     global app
     try:
         if app and hasattr(app, "stdin") and app.stdin:
             print(f"[COMMS→UI] {cmd}")
-            app.stdin.write(cmd + "\n")
+            app.stdin.write((cmd + "\n").encode("utf-8"))
             app.stdin.flush()
         else:
             with _ui_queue_lock:
@@ -72,6 +72,22 @@ def send_ui_update(cmd: str) -> None:
             print(f"[COMMS] UI not ready, queued: {cmd}")
     except Exception as e:
         print(f"[COMMS] UI send error: {e}")
+
+
+def send_ui_frame(jpeg_bytes: bytes) -> None:
+    """Send a raw JPEG frame to the UI subprocess via binary stdin.
+
+    Protocol: b'FRAME <size>\n' followed immediately by <size> raw bytes.
+    """
+    global app
+    try:
+        if app and hasattr(app, "stdin") and app.stdin:
+            header = b"FRAME " + str(len(jpeg_bytes)).encode() + b"\n"
+            app.stdin.write(header)
+            app.stdin.write(jpeg_bytes)
+            app.stdin.flush()
+    except Exception as e:
+        print(f"[COMMS] Frame send error: {e}")
 
 
 def flush_ui_queue() -> None:
@@ -84,7 +100,7 @@ def flush_ui_queue() -> None:
         if app and hasattr(app, "stdin") and app.stdin:
             for cmd in pending:
                 print(f"[COMMS→UI queued] {cmd}")
-                app.stdin.write(cmd + "\n")
+                app.stdin.write((cmd + "\n").encode("utf-8"))
                 app.stdin.flush()
     except Exception as e:
         print(f"[COMMS] Flush error: {e}")
@@ -109,12 +125,13 @@ def listen_feedback(app_instance=None) -> None:
                 time.sleep(0.1)
                 continue
 
-            line = app.stdout.readline()
-            if not line:
+            raw = app.stdout.readline()
+            if not raw:
                 print("[COMMS] UI subprocess closed")
                 break
 
-            line = line.strip()
+            # stdout is binary (no encoding on Popen); decode here
+            line = raw.decode("utf-8", errors="replace").strip()
             if not line:
                 continue
 

@@ -18,7 +18,8 @@ from typing import Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
-from yolo_infer import Detection, YoloInference
+from src.vision.board_state import Detection
+from src.ai.yolo_inference import YoloInference
 
 
 # ---------------------------------------------------------------------------
