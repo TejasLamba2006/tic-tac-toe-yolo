@@ -16,6 +16,5 @@ python3 -m src.main \
 python3 -m src.main \
   --weights tictactoe_yolov8_quant_pc_uf_od_tictactoe_1.nb \
   --camera auto \
-  --gui opencv \
+  --gui demo \
   --npu \
-  --
