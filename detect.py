@@ -23,7 +23,11 @@ import cv2
 from src.ai.yolo_inference import YoloInference
 from src.vision.board_detector import BoardDetector
 from src.vision.board_state import BoardStateEstimator
-from src.vision.camera import configure_capture, open_camera, parse_camera_source
+from src.vision.camera import (
+    configure_capture,
+    open_camera,
+    parse_camera_source,
+)
 from src.vision.stability import BoardGeometryTracker
 from src.main import analyze_frame, _build_board_inset
 
@@ -41,21 +45,21 @@ def run(args: argparse.Namespace) -> None:
     print("[DETECT] Model loaded.")
 
     # ---- Pipeline helpers --------------------------------------------------
-    board_detector  = BoardDetector()
-    board_estimator = BoardStateEstimator(
+    board_detector   = BoardDetector()
+    board_estimator  = BoardStateEstimator(
         minimum_confidence=args.conf,
         smoothing_window=5,
     )
     geometry_tracker = BoardGeometryTracker()
 
-    # ---- Camera ------------------------------------------------------------
-    source = parse_camera_source(args.camera)
-    cap = open_camera(source)
-    if cap is None or not cap.isOpened():
-        print(f"[DETECT] ERROR: Could not open camera '{args.camera}'")
-        return
-    configure_capture(cap, args.width, args.height, args.fps)
-    print(f"[DETECT] Camera ready — {args.width}×{args.height} @ {args.fps} fps")
+    # ---- Camera (returns CameraSession, not VideoCapture) ------------------
+    source  = parse_camera_source(args.camera)
+    session = open_camera(source)          # CameraSession — has .read() / .release()
+
+    # configure_capture takes the inner cv2.VideoCapture + source
+    configure_capture(session.capture, args.width, args.height, args.fps,
+                      source=session.source)
+    print(f"[DETECT] Camera ready — source={session.source}")
 
     # ---- Window ------------------------------------------------------------
     win = "Board inset — Q / ESC to quit"
@@ -63,7 +67,7 @@ def run(args: argparse.Namespace) -> None:
     print("[DETECT] Running. Press Q or ESC to quit.")
 
     while True:
-        ok, frame = cap.read()
+        ok, frame = session.read()
         if not ok or frame is None:
             cv2.waitKey(10)
             continue
@@ -79,7 +83,7 @@ def run(args: argparse.Namespace) -> None:
             geometry_tracker=geometry_tracker,
         )
 
-        # The inset: warped board + 3x3 grid lines + detection boxes
+        # Warped board with 3×3 grid lines and detection bounding boxes
         inset = _build_board_inset(analysis, inset_size=args.inset_size)
         cv2.imshow(win, inset)
 
@@ -87,7 +91,7 @@ def run(args: argparse.Namespace) -> None:
         if key in (ord("q"), ord("Q"), 27):
             break
 
-    cap.release()
+    session.release()
     cv2.destroyAllWindows()
     print("[DETECT] Done.")
 
