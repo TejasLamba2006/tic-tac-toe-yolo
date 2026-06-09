@@ -118,7 +118,7 @@ def run(args: argparse.Namespace) -> None:
     print("[DETECT] Model loaded.")
 
     # ---- Open camera -------------------------------------------------------
-    source = parse_camera_source(args.camera, auto_max_index=10)
+    source = parse_camera_source(args.camera)
     cap = open_camera(source)
     if cap is None or not cap.isOpened():
         print(f"[DETECT] ERROR: Could not open camera '{args.camera}'")
