@@ -136,7 +136,7 @@ def find_best_move(board: Board, ai_player: str = "Y") -> MoveRecommendation | N
         score = minimax(board, 0, False, ai_player, human_player, alpha, inf)
         board[row][col] = "E"
 
-        if score > best_score or (score == best_score and best_move is not None and (row, col) < best_move):
+        if score > best_score:
             best_score = score
             best_move = (row, col)
         alpha = max(alpha, best_score)

@@ -82,6 +82,9 @@ class BoardStateEstimator:
             for _ in range(self.rows)
         ]
         self._initialized = False
+        # Cache for Fix 6: avoid re-running HSV segmentation every frame.
+        self._cached_bbox: tuple[int, int, int, int] | None = None
+        self._cached_bbox_image_shape: tuple[int, ...] | None = None
 
     def estimate(self, image: np.ndarray, detections: Iterable[Detection]) -> BoardObservation:
         detection_list = list(detections)
@@ -97,6 +100,14 @@ class BoardStateEstimator:
         )
 
     def _find_board_bbox(self, image: np.ndarray):
+        # Fix 6: cache the HSV-based bounding box so the expensive segmentation
+        # (cvtColor, inRange, morphologyEx, findContours) is only re-run when the
+        # image dimensions change, which is the best available proxy for a new
+        # board geometry when no external geometry-change signal is passed in.
+        current_shape = image.shape
+        if self._cached_bbox is not None and self._cached_bbox_image_shape == current_shape:
+            return self._cached_bbox
+
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
 
         lower_blue = np.array([80, 40, 40])
@@ -114,11 +125,14 @@ class BoardStateEstimator:
         )
 
         if not contours:
-            return 0, 0, image.shape[1], image.shape[0]
+            bbox = (0, 0, image.shape[1], image.shape[0])
+        else:
+            largest = max(contours, key=cv2.contourArea)
+            bbox = cv2.boundingRect(largest)
 
-        largest = max(contours, key=cv2.contourArea)
-
-        return cv2.boundingRect(largest)
+        self._cached_bbox = bbox
+        self._cached_bbox_image_shape = current_shape
+        return bbox
 
     def _estimate_once(
         self,
@@ -148,6 +162,7 @@ class BoardStateEstimator:
                 cell_height,
                 board_x,
                 board_y,
+                confidence=detection.confidence,
             )
             priority = 1 if symbol != "E" else 0
             candidate = (priority, assignment_score)
@@ -167,6 +182,7 @@ class BoardStateEstimator:
         cell_height,
         board_x,
         board_y,
+        confidence: float = 1.0,
     ):
 
         x1, y1, x2, y2 = xyxy
@@ -183,7 +199,9 @@ class BoardStateEstimator:
         row = max(0, min(self.rows - 1, row))
         col = max(0, min(self.cols - 1, col))
 
-        return row, col, 1.0
+        # Fix 4: return the detection's actual confidence so higher-confidence
+        # detections win when two boxes map to the same cell.
+        return row, col, confidence
 
     def _stabilize_board(self, instant_board: list[list[str]]) -> list[list[str]]:
         if not self._initialized:
@@ -232,14 +250,16 @@ class BoardStateEstimator:
     ) -> None:
         history = self._cell_history[row_index][col_index]
         history.append(instant_board[row_index][col_index])
-        label = self._select_history_label(history)
+        # Fix 3: compute Counter once and pass it to both helpers to avoid
+        # building it twice per cell per frame.
+        counts = Counter(history)
+        label = self._select_history_label(history, counts)
         current_label = next_board[row_index][col_index]
 
-        if self._should_flip_cell(history, current_label, label, required_votes):
+        if self._should_flip_cell(counts, current_label, label, required_votes):
             next_board[row_index][col_index] = label
 
-    def _select_history_label(self, history: Sequence[str]) -> str:
-        counts = Counter(history)
+    def _select_history_label(self, history: Sequence[str], counts: Counter) -> str:
         max_votes = max(counts.values())
         for candidate in reversed(history):
             if counts[candidate] == max_votes:
@@ -248,12 +268,11 @@ class BoardStateEstimator:
 
     def _should_flip_cell(
         self,
-        history: Sequence[str],
+        counts: Counter,
         current_label: str,
         new_label: str,
         required_votes: int,
     ) -> bool:
-        counts = Counter(history)
         current_votes = counts.get(current_label, 0)
         new_votes = counts.get(new_label, 0)
 

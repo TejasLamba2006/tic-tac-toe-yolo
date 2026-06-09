@@ -185,6 +185,9 @@ def analyze_frame(
     ai_color: str,
     board_size: int,
     geometry_tracker: BoardGeometryTracker | None = None,
+    # Fix 2: mutable default acts as a persistent cache cell across calls.
+    # Index 0 = last board signature, index 1 = last MoveDecision.
+    _cache: list = [None, None],
 ) -> FrameAnalysis:
     board_result = board_detector.detect(frame)
     if geometry_tracker is not None:
@@ -208,7 +211,12 @@ def analyze_frame(
     #     )
     observation = board_estimator.estimate(warped_frame, detections)
     move_start = time.perf_counter()
-    decision = recommend_move(observation.board, ai_player=ai_color)
+    # Fix 2: skip minimax when the board hasn't changed since the last frame.
+    board_signature = tuple(tuple(row) for row in observation.board)
+    if board_signature != _cache[0]:
+        _cache[0] = board_signature
+        _cache[1] = recommend_move(observation.board, ai_player=ai_color)
+    decision: MoveDecision = _cache[1]  # type: ignore[assignment]
     move_ms = (time.perf_counter() - move_start) * 1000.0
     analysis_ms = (time.perf_counter() - analysis_start) * 1000.0
     fps = 1000.0 / analysis_ms if analysis_ms > 0 else 0.0

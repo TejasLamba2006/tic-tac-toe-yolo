@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from collections import deque
 from pathlib import Path
 import time
 
@@ -30,23 +31,25 @@ def compute_iou(box1, box2):
 
 
 def nms(boxes, scores, iou_threshold=0.45):
-    order = sorted(
-        range(len(scores)),
-        key=lambda i: scores[i],
-        reverse=True
+    order: deque[int] = deque(
+        sorted(
+            range(len(scores)),
+            key=lambda i: scores[i],
+            reverse=True,
+        )
     )
 
     keep = []
 
     while order:
-        current = order.pop(0)
+        current = order.popleft()
         keep.append(current)
 
-        order = [
+        order = deque(
             idx
             for idx in order
             if compute_iou(boxes[current], boxes[idx]) < iou_threshold
-        ]
+        )
 
     return keep
 
