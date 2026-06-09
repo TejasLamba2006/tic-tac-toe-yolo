@@ -346,6 +346,15 @@ def run_app(config: AppConfig) -> int:
 
     try:
         while True:
+            for i in range(10):
+                ret, frame = session.read()
+                print(
+                    f"read {i}: ret={ret}, "
+                    f"frame={'None' if frame is None else frame.shape}"
+                )
+
+                if ret and frame is not None:
+                    break
             ok, frame = session.read()
             if not ok or frame is None:
                 raise RuntimeError("Failed to read a frame from the camera")
