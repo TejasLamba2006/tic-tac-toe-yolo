@@ -119,74 +119,125 @@ def draw_game_overlay(
     detections    = None,
     user_sym:     str = RED,
     ai_sym:       str = YELLOW,
+    grid_centers: Optional[Dict[Tuple[int, int], Tuple[int, int]]] = None,
+    grid_radius:  int = 0,
 ) -> None:
     """
     Draw the game board grid + pieces + suggested move highlight.
-    Uses a fixed grid covering the centre 60% of the frame.
+    Uses calibrated grid if available; otherwise falls back to a fixed grid covering the centre of the frame.
     """
     h, w = frame.shape[:2]
-
-    # Fixed grid bounding box: centre 60% of frame
-    margin_x = int(w * 0.05)
-    margin_y = int(h * 0.05)
-    gx, gy   = margin_x, margin_y
-    gw       = w - 2 * margin_x
-    gh       = h - 2 * margin_y
-    cw       = gw // 3
-    ch       = gh // 3
 
     # Draw detection boxes underneath everything
     if detections:
         draw_detections(frame, detections)
 
-    # Grid lines
-    for i in range(1, 3):
-        cv2.line(frame, (gx + i * cw, gy), (gx + i * cw, gy + gh), CLR_GRID, 2, cv2.LINE_AA)
-        cv2.line(frame, (gx, gy + i * ch), (gx + gw, gy + i * ch), CLR_GRID, 2, cv2.LINE_AA)
-
-    # Outer border
-    cv2.rectangle(frame, (gx, gy), (gx + gw, gy + gh), CLR_GRID, 2, cv2.LINE_AA)
-
-    # Suggested move pulsing highlight
-    sug = game.suggested_move
-    t   = time.time()
-    if sug and not game.game_over:
-        sr, sc   = sug
-        cx_sug   = gx + sc * cw + cw // 2
-        cy_sug   = gy + sr * ch + ch // 2
-        pulse    = int(cw * 0.35 + cw * 0.08 * math.sin(t * 4))
-        overlay  = frame.copy()
-        cv2.circle(overlay, (cx_sug, cy_sug), pulse, CLR_SUGGEST, -1)
-        cv2.addWeighted(overlay, 0.25, frame, 0.75, 0, frame)
-        cv2.circle(frame, (cx_sug, cy_sug), pulse, CLR_SUGGEST, 3, cv2.LINE_AA)
-        _put(frame, "AI", (cx_sug - 12, cy_sug + 8), scale=0.5, color=CLR_SUGGEST, bold=True)
-
-    # Cell labels (X / O)
-    for r in range(3):
+    if grid_centers and grid_radius > 0:
+        # Draw calibrated grid lines
+        for r in range(3):
+            cv2.line(frame, grid_centers[(r, 0)], grid_centers[(r, 2)], CLR_GRID, 2, cv2.LINE_AA)
         for c in range(3):
-            cell   = game.board[r][c]
-            cx     = gx + c * cw + cw // 2
-            cy     = gy + r * ch + ch // 2
-            if cell == user_sym:
-                # Draw X
-                offs = int(cw * 0.28)
-                cv2.line(frame, (cx - offs, cy - offs), (cx + offs, cy + offs), CLR_USER_PIECE, 6, cv2.LINE_AA)
-                cv2.line(frame, (cx + offs, cy - offs), (cx - offs, cy + offs), CLR_USER_PIECE, 6, cv2.LINE_AA)
-            elif cell == ai_sym:
-                # Draw O
-                rad = int(cw * 0.28)
-                cv2.circle(frame, (cx, cy), rad, CLR_AI_PIECE, 5, cv2.LINE_AA)
-            else:
-                # Empty — small centre dot
-                cv2.circle(frame, (cx, cy), 4, (100, 100, 100), -1)
+            cv2.line(frame, grid_centers[(0, c)], grid_centers[(2, c)], CLR_GRID, 2, cv2.LINE_AA)
 
-    # Winning line
-    if game.winning_cells and len(game.winning_cells) == 3:
-        def cell_centre(r, c):
-            return (gx + c * cw + cw // 2, gy + r * ch + ch // 2)
-        pt1 = cell_centre(*game.winning_cells[0])
-        pt2 = cell_centre(*game.winning_cells[2])
-        cv2.line(frame, pt1, pt2, CLR_WIN_LINE, 5, cv2.LINE_AA)
+        # Outer border boundaries enclosing the four corners
+        p00 = grid_centers[(0, 0)]
+        p02 = grid_centers[(0, 2)]
+        p20 = grid_centers[(2, 0)]
+        p22 = grid_centers[(2, 2)]
+        cv2.line(frame, p00, p02, CLR_GRID, 2, cv2.LINE_AA)
+        cv2.line(frame, p02, p22, CLR_GRID, 2, cv2.LINE_AA)
+        cv2.line(frame, p22, p20, CLR_GRID, 2, cv2.LINE_AA)
+        cv2.line(frame, p20, p00, CLR_GRID, 2, cv2.LINE_AA)
+
+        # Suggested move pulsing highlight
+        sug = game.suggested_move
+        t   = time.time()
+        if sug and not game.game_over:
+            sr, sc   = sug
+            cx_sug, cy_sug = grid_centers[(sr, sc)]
+            pulse    = int(grid_radius * 0.85 + grid_radius * 0.15 * math.sin(t * 4))
+            overlay  = frame.copy()
+            cv2.circle(overlay, (cx_sug, cy_sug), pulse, CLR_SUGGEST, -1)
+            cv2.addWeighted(overlay, 0.25, frame, 0.75, 0, frame)
+            cv2.circle(frame, (cx_sug, cy_sug), pulse, CLR_SUGGEST, 3, cv2.LINE_AA)
+            _put(frame, "AI", (cx_sug - 12, cy_sug + 8), scale=0.5, color=CLR_SUGGEST, bold=True)
+
+        # Cell labels (X / O)
+        for r in range(3):
+            for c in range(3):
+                cell   = game.board[r][c]
+                cx, cy = grid_centers[(r, c)]
+                if cell == user_sym:
+                    offs = int(grid_radius * 0.7)
+                    cv2.line(frame, (cx - offs, cy - offs), (cx + offs, cy + offs), CLR_USER_PIECE, 6, cv2.LINE_AA)
+                    cv2.line(frame, (cx + offs, cy - offs), (cx - offs, cy + offs), CLR_USER_PIECE, 6, cv2.LINE_AA)
+                elif cell == ai_sym:
+                    rad = int(grid_radius * 0.7)
+                    cv2.circle(frame, (cx, cy), rad, CLR_AI_PIECE, 5, cv2.LINE_AA)
+                else:
+                    cv2.circle(frame, (cx, cy), 4, (100, 100, 100), -1)
+
+        # Winning line
+        if game.winning_cells and len(game.winning_cells) == 3:
+            pt1 = grid_centers[game.winning_cells[0]]
+            pt2 = grid_centers[game.winning_cells[2]]
+            cv2.line(frame, pt1, pt2, CLR_WIN_LINE, 5, cv2.LINE_AA)
+
+    else:
+        # Fallback grid: centre of frame
+        margin_x = int(w * 0.05)
+        margin_y = int(h * 0.05)
+        gx, gy   = margin_x, margin_y
+        gw       = w - 2 * margin_x
+        gh       = h - 2 * margin_y
+        cw       = gw // 3
+        ch       = gh // 3
+
+        # Grid lines
+        for i in range(1, 3):
+            cv2.line(frame, (gx + i * cw, gy), (gx + i * cw, gy + gh), CLR_GRID, 2, cv2.LINE_AA)
+            cv2.line(frame, (gx, gy + i * ch), (gx + gw, gy + i * ch), CLR_GRID, 2, cv2.LINE_AA)
+
+        # Outer border
+        cv2.rectangle(frame, (gx, gy), (gx + gw, gy + gh), CLR_GRID, 2, cv2.LINE_AA)
+
+        # Suggested move pulsing highlight
+        sug = game.suggested_move
+        t   = time.time()
+        if sug and not game.game_over:
+            sr, sc   = sug
+            cx_sug   = gx + sc * cw + cw // 2
+            cy_sug   = gy + sr * ch + ch // 2
+            pulse    = int(cw * 0.35 + cw * 0.08 * math.sin(t * 4))
+            overlay  = frame.copy()
+            cv2.circle(overlay, (cx_sug, cy_sug), pulse, CLR_SUGGEST, -1)
+            cv2.addWeighted(overlay, 0.25, frame, 0.75, 0, frame)
+            cv2.circle(frame, (cx_sug, cy_sug), pulse, CLR_SUGGEST, 3, cv2.LINE_AA)
+            _put(frame, "AI", (cx_sug - 12, cy_sug + 8), scale=0.5, color=CLR_SUGGEST, bold=True)
+
+        # Cell labels (X / O)
+        for r in range(3):
+            for c in range(3):
+                cell   = game.board[r][c]
+                cx     = gx + c * cw + cw // 2
+                cy     = gy + r * ch + ch // 2
+                if cell == user_sym:
+                    offs = int(cw * 0.28)
+                    cv2.line(frame, (cx - offs, cy - offs), (cx + offs, cy + offs), CLR_USER_PIECE, 6, cv2.LINE_AA)
+                    cv2.line(frame, (cx + offs, cy - offs), (cx - offs, cy + offs), CLR_USER_PIECE, 6, cv2.LINE_AA)
+                elif cell == ai_sym:
+                    rad = int(cw * 0.28)
+                    cv2.circle(frame, (cx, cy), rad, CLR_AI_PIECE, 5, cv2.LINE_AA)
+                else:
+                    cv2.circle(frame, (cx, cy), 4, (100, 100, 100), -1)
+
+        # Winning line
+        if game.winning_cells and len(game.winning_cells) == 3:
+            def cell_centre(r, c):
+                return (gx + c * cw + cw // 2, gy + r * ch + ch // 2)
+            pt1 = cell_centre(*game.winning_cells[0])
+            pt2 = cell_centre(*game.winning_cells[2])
+            cv2.line(frame, pt1, pt2, CLR_WIN_LINE, 5, cv2.LINE_AA)
 
 
 # ---------------------------------------------------------------------------
@@ -351,3 +402,55 @@ def draw_zoom_pan_info(frame: np.ndarray, camera_controller) -> None:
     y_base = h - 80
     for i, txt in enumerate(info):
         _put(frame, txt, (x_base, y_base + i * 22), scale=0.50, color=CLR_TEXT_DIM)
+
+
+# ---------------------------------------------------------------------------
+# Calibration HUD & Overlay
+# ---------------------------------------------------------------------------
+
+def draw_calibration_overlay(
+    frame:           np.ndarray,
+    mode:            int,
+    detected_count:  int,
+    grid_centers:    Optional[Dict[Tuple[int, int], Tuple[int, int]]],
+    grid_radius:     int,
+    stable_count:    int,
+    required_stable: int,
+) -> None:
+    """Draw a dedicated HUD and preview lines during grid calibration."""
+    h, w = frame.shape[:2]
+
+    # Draw info panel at top left
+    _panel_bg(frame, 10, 10, 360, 160)
+
+    _put(frame, "GRID CALIBRATION", (20, 35), scale=0.65, color=(0, 255, 255), bold=True)
+    _put(frame, f"Detected Balls: {detected_count} / 5", (20, 68), scale=0.52, color=CLR_TEXT_MAIN)
+
+    if grid_centers and grid_radius > 0:
+        # Draw grid lines between cell centers
+        for r in range(3):
+            cv2.line(frame, grid_centers[(r, 0)], grid_centers[(r, 2)], (0, 255, 0), 2, cv2.LINE_AA)
+        for c in range(3):
+            cv2.line(frame, grid_centers[(0, c)], grid_centers[(2, c)], (0, 255, 0), 2, cv2.LINE_AA)
+
+        # Enclosing border around four corners
+        p00 = grid_centers[(0, 0)]
+        p02 = grid_centers[(0, 2)]
+        p20 = grid_centers[(2, 0)]
+        p22 = grid_centers[(2, 2)]
+        cv2.line(frame, p00, p02, (0, 255, 0), 2, cv2.LINE_AA)
+        cv2.line(frame, p02, p22, (0, 255, 0), 2, cv2.LINE_AA)
+        cv2.line(frame, p22, p20, (0, 255, 0), 2, cv2.LINE_AA)
+        cv2.line(frame, p20, p00, (0, 255, 0), 2, cv2.LINE_AA)
+
+        # Cell markers & radii
+        for (r, c), (gx, gy) in grid_centers.items():
+            cv2.circle(frame, (gx, gy), 5, (0, 255, 0), -1)
+            cv2.circle(frame, (gx, gy), grid_radius, (0, 255, 0), 1, cv2.LINE_AA)
+
+        _put(frame, "Grid found! Stabilising...", (20, 100), scale=0.50, color=(0, 255, 0))
+        _put(frame, f"Stability: {stable_count}/{required_stable} frames", (20, 130), scale=0.50, color=(0, 255, 0))
+    else:
+        _put(frame, "Place balls at 4 corners + center", (20, 100), scale=0.48, color=(80, 80, 255))
+        _put(frame, "Waiting for exactly 5 balls...", (20, 130), scale=0.48, color=(80, 80, 255))
+

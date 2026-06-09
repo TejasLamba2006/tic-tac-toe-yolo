@@ -63,6 +63,8 @@ class BoardStateEstimator:
         ]
         self._stable_board: List[List[str]] = [[EMPTY] * 3 for _ in range(3)]
         self._initialized = False
+        self.grid_centers: Dict[Tuple[int, int], Tuple[int, int]] = {}
+        self.grid_radius: int = 0
 
     def reset(self) -> None:
         for row in self._cell_history:
@@ -108,8 +110,23 @@ class BoardStateEstimator:
                 continue
 
             cx, cy = det.center
-            col = max(0, min(2, int(cx / cell_w)))
-            row = max(0, min(2, int(cy / cell_h)))
+
+            if self.grid_centers and self.grid_radius > 0:
+                best_cell = None
+                best_dist = float('inf')
+                for (r, c), (gx, gy) in self.grid_centers.items():
+                    dist = np.sqrt((cx - gx)**2 + (cy - gy)**2)
+                    if dist < self.grid_radius and dist < best_dist:
+                        best_dist = dist
+                        best_cell = (r, c)
+                if best_cell is not None:
+                    row, col = best_cell
+                else:
+                    # Outside board grid boundaries, ignore the detection
+                    continue
+            else:
+                col = max(0, min(2, int(cx / cell_w)))
+                row = max(0, min(2, int(cy / cell_h)))
 
             priority = (1 if symbol != EMPTY else 0, det.confidence)
             if priority >= priorities[row][col]:
@@ -117,6 +134,51 @@ class BoardStateEstimator:
                 priorities[row][col] = priority
 
         return board
+
+    def calibrate_grid(self, centroids: List[Tuple[float, float]]) -> bool:
+        """
+        Attempt to form a 3x3 grid from 5 points (Corners + Center).
+        Expected points: (0,0), (0,2), (1,1), (2,0), (2,2)
+        """
+        if len(centroids) != 5:
+            return False
+
+        try:
+            # Sort by Y (top to bottom)
+            centroids_sorted = sorted(centroids, key=lambda p: p[1])
+            
+            # Top row (2 points)
+            top = sorted(centroids_sorted[:2], key=lambda p: p[0])
+            # Middle (1 point)
+            mid = centroids_sorted[2]
+            # Bottom row (2 points)
+            bottom = sorted(centroids_sorted[3:], key=lambda p: p[0])
+
+            p00, p02 = top[0], top[1]
+            p11 = mid
+            p20, p22 = bottom[0], bottom[1]
+
+            # Interpolate missing points
+            p01 = ((p00[0] + p02[0]) / 2.0, (p00[1] + p02[1]) / 2.0)
+            p10 = ((p00[0] + p20[0]) / 2.0, (p00[1] + p20[1]) / 2.0)
+            p12 = ((p02[0] + p22[0]) / 2.0, (p02[1] + p22[1]) / 2.0)
+            p21 = ((p20[0] + p22[0]) / 2.0, (p20[1] + p22[1]) / 2.0)
+
+            def to_int_pt(pt):
+                return (int(pt[0]), int(pt[1]))
+
+            self.grid_centers = {
+                (0, 0): to_int_pt(p00), (0, 1): to_int_pt(p01), (0, 2): to_int_pt(p02),
+                (1, 0): to_int_pt(p10), (1, 1): to_int_pt(p11), (1, 2): to_int_pt(p12),
+                (2, 0): to_int_pt(p20), (2, 1): to_int_pt(p21), (2, 2): to_int_pt(p22)
+            }
+
+            dist_00_01 = np.linalg.norm(np.array(p00) - np.array(p01))
+            self.grid_radius = int(dist_00_01 * 0.4)
+            return True
+        except Exception as e:
+            print(f"[VISION] Grid calibration exception: {e}")
+            return False
 
     def _stabilize(self, instant: List[List[str]]) -> List[List[str]]:
         if not self._initialized:
@@ -397,6 +459,10 @@ class VisionSystem:
     # ------------------------------------------------------------------
     # YOLO inference + board estimation
     # ------------------------------------------------------------------
+
+    def calibrate_grid(self, centroids: List[Tuple[float, float]]) -> bool:
+        """Forward grid calibration to estimator."""
+        return self.estimator.calibrate_grid(centroids)
 
     def rotate_board_90(self) -> None:
         """Rotate the logical board orientation by 90° CW (GUI button)."""

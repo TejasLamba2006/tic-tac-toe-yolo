@@ -96,7 +96,8 @@ class TicTacToeApp:
         # Game flow flags
         self.board_needs_clearing = False
         self._board_clear_count   = 0
-        self.mode = 0  # 0=preview/game (combined), 1=paused
+        self.mode = 0  # 0=preview/game (combined), 1=paused, 2=calibration
+        self._calibration_stable_count = 0
 
         # FPS tracking
         self._fps_start    = time.time()
@@ -163,67 +164,105 @@ class TicTacToeApp:
             # Apply user's board-rotation preference
             raw_board = self._rotate_board(raw_board)
 
-            # ---- Board stability gate ----------------------------------
-            board_changed = (raw_board != self._last_stable_board)
-            if board_changed:
-                self._stable_count      = 0
-                self._last_stable_board = [row[:] for row in raw_board]
+            if self.mode == 2:
+                # ---- Calibration Mode ----------------------------------
+                centroids = [det.center for det in detections if det.label in ("red_ball", "yellow_ball")]
+                calibrated = self.vision.calibrate_grid(centroids)
+                if calibrated:
+                    self._calibration_stable_count += 1
+                else:
+                    self._calibration_stable_count = max(0, self._calibration_stable_count - 1)
+
+                if self._calibration_stable_count >= 15:
+                    self.mode = 0
+                    self._calibration_stable_count = 0
+                    print("[APP] Grid calibration completed and locked in!")
+                    comms.send_ui_update("CALIBRATION_DONE")
+                
+                board_stable = False
             else:
-                self._stable_count += 1
+                # ---- Board stability gate ----------------------------------
+                board_changed = (raw_board != self._last_stable_board)
+                if board_changed:
+                    self._stable_count      = 0
+                    self._last_stable_board = [row[:] for row in raw_board]
+                else:
+                    self._stable_count += 1
 
-            board_stable = (self._stable_count >= self.required_stable_frames)
+                board_stable = (self._stable_count >= self.required_stable_frames)
 
-            # ---- Validate board ----------------------------------------
-            valid, inv_reason = validate_board(raw_board, self.user_sym, self.ai_sym)
-            if not valid:
-                self.game.game_status_msg = f"Invalid Board"
-                self.game.suggested_move  = None
-                if os.environ.get("TICTACTOE_DEBUG"):
-                    print(f"[VALIDATE] INVALID: {inv_reason}")
-            else:
-                if board_stable and not self.game.game_over:
-                    self._process_stable_board(raw_board, manual_mode)
+                # ---- Validate board ----------------------------------------
+                valid, inv_reason = validate_board(raw_board, self.user_sym, self.ai_sym)
+                if not valid:
+                    self.game.game_status_msg = f"Invalid Board"
+                    self.game.suggested_move  = None
+                    if os.environ.get("TICTACTOE_DEBUG"):
+                        print(f"[VALIDATE] INVALID: {inv_reason}")
+                else:
+                    if board_stable and not self.game.game_over:
+                        self._process_stable_board(raw_board, manual_mode)
 
-            # ---- Update Minimax suggestion ----------------------------
-            self.game.update_suggestion()
+                # ---- Update Minimax suggestion ----------------------------
+                self.game.update_suggestion()
 
-            # ---- AI move timing ---------------------------------------
-            self._tick_computer_move()
+                # ---- AI move timing ---------------------------------------
+                self._tick_computer_move()
 
-            # ---- AI move confirmation ---------------------------------
-            self._tick_ai_confirm(raw_board)
+                # ---- AI move confirmation ---------------------------------
+                self._tick_ai_confirm(raw_board)
 
-            # ---- Game end check ---------------------------------------
-            self.game.check_game_end()
-            self.game.log_status()
+                # ---- Game end check ---------------------------------------
+                self.game.check_game_end()
+                self.game.log_status()
 
             # ---- Render -----------------------------------------------
             display = frame.copy()
-            renderer.draw_game_overlay(
-                display, self.game,
-                detections=detections,
-                user_sym=self.user_sym,
-                ai_sym=self.ai_sym,
-            )
-            renderer.draw_hud(
-                display, self.game,
-                fps=self._current_fps,
-                inference_ms=self.vision.last_inference_ms,
-                user_sym=self.user_sym,
-                ai_sym=self.ai_sym,
-                board_rotation=self._board_rotation,
-            )
-            renderer.draw_win_message(display, self.game)
-            renderer.draw_zoom_pan_info(display, self.cam_ctrl)
-
-            # Stability indicator
-            if not board_stable and not self.game.game_over:
-                cv2.putText(
-                    display,
-                    f"Stabilising {self._stable_count}/{self.required_stable_frames}...",
-                    (10, display.shape[0] - 40),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.50, (180, 180, 0), 1, cv2.LINE_AA,
+            if self.mode == 2:
+                renderer.draw_game_overlay(
+                    display, self.game,
+                    detections=detections,
+                    user_sym=self.user_sym,
+                    ai_sym=self.ai_sym,
+                    grid_centers=self.vision.estimator.grid_centers,
+                    grid_radius=self.vision.estimator.grid_radius,
                 )
+                renderer.draw_calibration_overlay(
+                    display,
+                    mode=self.mode,
+                    detected_count=len([det for det in detections if det.label in ("red_ball", "yellow_ball")]),
+                    grid_centers=self.vision.estimator.grid_centers,
+                    grid_radius=self.vision.estimator.grid_radius,
+                    stable_count=self._calibration_stable_count,
+                    required_stable=15,
+                )
+            else:
+                renderer.draw_game_overlay(
+                    display, self.game,
+                    detections=detections,
+                    user_sym=self.user_sym,
+                    ai_sym=self.ai_sym,
+                    grid_centers=self.vision.estimator.grid_centers,
+                    grid_radius=self.vision.estimator.grid_radius,
+                )
+                renderer.draw_hud(
+                    display, self.game,
+                    fps=self._current_fps,
+                    inference_ms=self.vision.last_inference_ms,
+                    user_sym=self.user_sym,
+                    ai_sym=self.ai_sym,
+                    board_rotation=self._board_rotation,
+                )
+                renderer.draw_win_message(display, self.game)
+                renderer.draw_zoom_pan_info(display, self.cam_ctrl)
+
+                # Stability indicator
+                if not board_stable and not self.game.game_over:
+                    cv2.putText(
+                        display,
+                        f"Stabilising {self._stable_count}/{self.required_stable_frames}...",
+                        (10, display.shape[0] - 40),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.50, (180, 180, 0), 1, cv2.LINE_AA,
+                    )
 
             cv2.imshow(window, display)
 
@@ -252,6 +291,16 @@ class TicTacToeApp:
             elif key == ord("p"):
                 self.mode = 1 - self.mode
                 print(f"[APP] {'Paused' if self.mode == 1 else 'Resumed'}")
+            elif key == ord("c"):
+                self.mode = 2
+                self._calibration_stable_count = 0
+                print("[APP] Entering Calibration Mode...")
+            elif key == ord(" "):
+                if self.mode == 2 and self.vision.estimator.grid_centers:
+                    self.mode = 0
+                    self._calibration_stable_count = 0
+                    print("[APP] Calibration confirmed manually!")
+                    comms.send_ui_update("CALIBRATION_DONE")
             elif key == ord("m"):
                 manual_mode = not manual_mode
                 print(f"[APP] Manual mode: {manual_mode}")

@@ -141,7 +141,7 @@ def listen_feedback(app_instance=None) -> None:
             elif line == "CALIBRATE":
                 print("[COMMS] Calibrate requested from UI")
                 if app_instance:
-                    app_instance.mode = 1  # future calibration mode
+                    app_instance.mode = 2  # grid calibration mode
 
             else:
                 print(f"[COMMS] Unhandled UI message: {line!r}")
