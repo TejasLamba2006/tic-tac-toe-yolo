@@ -319,6 +319,7 @@ def _draw_panel(frame: np.ndarray, analysis: FrameAnalysis) -> np.ndarray:
 
 def run_app(config: AppConfig) -> int:
     camera_source = parse_camera_source(config.camera)
+    session.release()
     session = open_camera(camera_source, auto_max_index=config.auto_max_index)
     configure_capture(session.capture, config.frame_width,
                       config.frame_height, config.fps)
