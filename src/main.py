@@ -359,7 +359,8 @@ def run_app(config: AppConfig) -> int:
             "try passing --frame-width 640 --frame-height 480 to match the "
             "native DCMIPP resolution and avoid VIDIOC_S_FMT reconfiguration."
         )
-    print(f"[diag] stream OK after configure — frame shape: {_frame_pre.shape}")
+    print(
+        f"[diag] stream OK after configure — frame shape: {_frame_pre.shape}")
     # -------------------------------------------------------------------------
 
     # CMA diagnostic: probe free contiguous memory before NPU model load.
@@ -406,7 +407,8 @@ def run_app(config: AppConfig) -> int:
                 if ok and frame is not None:
                     break
                 if _attempt < 2:
-                    print(f"[camera] frame read failed (attempt {_attempt + 1}), retrying...")
+                    print(
+                        f"[camera] frame read failed (attempt {_attempt + 1}), retrying...")
             if not ok or frame is None:
                 raise RuntimeError("Failed to read a frame from the camera")
 
