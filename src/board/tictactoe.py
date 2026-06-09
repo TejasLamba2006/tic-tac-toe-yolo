@@ -463,7 +463,7 @@ class TicTacToeApp:
         self._ui_started = True
         try:
             comms.app = subprocess.Popen(
-                ["python3", "ui.py"],
+                ["python3", "src/board/ui.py"],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
