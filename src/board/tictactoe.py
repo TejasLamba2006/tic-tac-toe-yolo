@@ -28,8 +28,8 @@ import numpy as np
 
 # Local modules
 from src.board import comms
-import camera_controller
-import renderer
+from src.board import camera_controller
+from src.board import renderer
 from vision import (
     EMPTY, RED, YELLOW,
     VisionSystem,
