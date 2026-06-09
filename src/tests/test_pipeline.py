@@ -86,3 +86,59 @@ def test_recommend_move_reports_game_over_when_board_is_finished() -> None:
     decision = recommend_move(board, ai_player="Y")
     assert decision.recommendation is None
     assert decision.winner == "Y"
+
+
+def test_draw_panel_renders_game_over_overlay() -> None:
+    from src.main import FrameAnalysis, _draw_panel
+    from src.vision.board_detector import BoardDetectionResult
+    from src.vision.board_state import BoardObservation
+    from src.vision.perspective import PerspectiveTransform
+
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    warped_frame = np.zeros((320, 320, 3), dtype=np.uint8)
+    board_result = BoardDetectionResult(
+        found=True,
+        corners=np.array([[0, 0], [320, 0], [320, 320], [0, 320]], dtype=np.float32),
+        score=1.0,
+        method="test",
+        contour_area=320 * 320,
+        fallback=False,
+    )
+    transform = PerspectiveTransform(
+        matrix=np.eye(3, dtype=np.float32),
+        inverse_matrix=np.eye(3, dtype=np.float32),
+        size=(320, 320),
+        corners=board_result.corners,
+    )
+    observation = BoardObservation(
+        board=[["Y", "Y", "Y"], ["R", "R", "E"], ["E", "E", "E"]],
+        cell_confidences=[[1.0] * 3] * 3,
+        cell_sources=[["test"] * 3] * 3,
+    )
+    decision = recommend_move(observation.board, ai_player="Y")
+
+    analysis = FrameAnalysis(
+        frame=frame,
+        warped_frame=warped_frame,
+        board_result=board_result,
+        transform=transform,
+        observation=observation,
+        decision=decision,
+        inference_ms=1.0,
+        model_run_ms=1.0,
+        move_ms=1.0,
+        analysis_ms=1.0,
+        fps=30.0,
+        detections=(),
+    )
+
+    # Render with game_over = True
+    rendered_go = _draw_panel(frame, analysis, game_over=True, winner="Y")
+    assert rendered_go is not None
+    assert rendered_go.shape == frame.shape
+
+    # Render with game_over = False
+    rendered_live = _draw_panel(frame, analysis, game_over=False, winner=None)
+    assert rendered_live is not None
+    assert rendered_live.shape == frame.shape
+

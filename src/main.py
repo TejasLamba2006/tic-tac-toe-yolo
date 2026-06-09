@@ -10,6 +10,7 @@ from typing import Sequence
 import cv2
 import numpy as np
 
+from .ai.minimax import check_winner, is_draw
 from .ai.move_selector import MoveDecision, recommend_move
 from .ai.yolo_inference import YoloInference
 from .vision.board_detector import BoardDetectionResult, BoardDetector
@@ -53,6 +54,7 @@ class AppConfig:
     headless: bool
     device: str | None
     npu: bool
+    gui: str
 
 
 @dataclass(frozen=True)
@@ -154,7 +156,7 @@ def _build_board_inset(analysis: FrameAnalysis, inset_size: int = 280) -> np.nda
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Tic-tac-toe vision pipeline")
-    parser.add_argument("--gui", default="opencv", choices=("opencv", "tkinter"),
+    parser.add_argument("--gui", default="opencv", choices=("opencv", "tkinter", "demo"),
                         help="User interface mode")
     parser.add_argument("--camera", default="auto",
                         help="Camera source: index, /dev/videoX, or auto")
@@ -254,7 +256,12 @@ def analyze_frame(
     )
 
 
-def _draw_panel(frame: np.ndarray, analysis: FrameAnalysis) -> np.ndarray:
+def _draw_panel(
+    frame: np.ndarray,
+    analysis: FrameAnalysis,
+    game_over: bool = False,
+    winner: str | None = None,
+) -> np.ndarray:
     rendered = frame.copy()
     height, width = rendered.shape[:2]
 
@@ -264,6 +271,21 @@ def _draw_panel(frame: np.ndarray, analysis: FrameAnalysis) -> np.ndarray:
     cv2.rectangle(overlay, (12, 12), (12 + panel_width,
                   12 + panel_height), (18, 18, 18), -1)
     cv2.addWeighted(overlay, 0.55, rendered, 0.45, 0, rendered)
+
+    # Status label in the top-right corner
+    status_text = "GAME OVER" if game_over else "LIVE"
+    status_color = (0, 0, 255) if game_over else (0, 255, 0)
+    (st_w, st_h), _ = cv2.getTextSize(status_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+    cv2.putText(
+        rendered,
+        status_text,
+        (width - st_w - 20, 30),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.6,
+        status_color,
+        2,
+        cv2.LINE_AA,
+    )
 
     y = 40
     line_height = 28
@@ -313,7 +335,7 @@ def _draw_panel(frame: np.ndarray, analysis: FrameAnalysis) -> np.ndarray:
                     0.6, (255, 190, 90), 2, cv2.LINE_AA)
         y += line_height
 
-    if analysis.decision.recommendation is not None:
+    if not game_over and analysis.decision.recommendation is not None:
         polygon = canonical_cell_polygon(
             analysis.decision.recommendation.row,
             analysis.decision.recommendation.col,
@@ -330,6 +352,53 @@ def _draw_panel(frame: np.ndarray, analysis: FrameAnalysis) -> np.ndarray:
     inset = _build_board_inset(analysis)
     rendered = _overlay_inset(
         rendered, inset, rendered.shape[1] - inset.shape[1] - 12, rendered.shape[0] - inset.shape[0] - 12)
+
+    if game_over:
+        # A semi-transparent dark rectangle covering roughly the center third of the frame
+        rect_y1 = height // 3
+        rect_y2 = 2 * height // 3
+        rect_x1 = width // 6
+        rect_x2 = 5 * width // 6
+
+        overlay_go = rendered.copy()
+        cv2.rectangle(overlay_go, (rect_x1, rect_y1), (rect_x2, rect_y2), (18, 18, 18), -1)
+        cv2.addWeighted(overlay_go, 0.55, rendered, 0.45, 0, rendered)
+
+        # Large centered text: "Winner: R" / "Winner: Y" / "Draw!"
+        winner_text = "Draw!" if winner == "Draw" else f"Winner: {winner}"
+        (w_width, w_height), _ = cv2.getTextSize(
+            winner_text, cv2.FONT_HERSHEY_SIMPLEX, 2.0, 4
+        )
+        tx_winner = (width - w_width) // 2
+        ty_winner = height // 2 - 10
+        cv2.putText(
+            rendered,
+            winner_text,
+            (tx_winner, ty_winner),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            2.0,
+            (0, 215, 255),
+            4,
+            cv2.LINE_AA,
+        )
+
+        # Smaller text below it: "Press R to restart" in white, scale ~0.9
+        restart_text = "Press R to restart"
+        (r_width, r_height), _ = cv2.getTextSize(
+            restart_text, cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2
+        )
+        tx_restart = (width - r_width) // 2
+        ty_restart = height // 2 + 40
+        cv2.putText(
+            rendered,
+            restart_text,
+            (tx_restart, ty_restart),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.9,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
 
     return rendered
 
@@ -422,7 +491,20 @@ def run_app(config: AppConfig) -> int:
                 geometry_tracker=geometry_tracker,
             )
 
-            rendered = _draw_panel(frame, analysis)
+            # Detect game-over state
+            board = analysis.observation.board
+            winner_symbol = check_winner(board)
+            if winner_symbol is not None:
+                game_over = True
+                winner = winner_symbol
+            elif is_draw(board):
+                game_over = True
+                winner = "Draw"
+            else:
+                game_over = False
+                winner = None
+
+            rendered = _draw_panel(frame, analysis, game_over=game_over, winner=winner)
             signature = tuple(tuple(row) for row in analysis.observation.board)
             if signature != last_signature:
                 last_signature = signature
@@ -434,6 +516,16 @@ def run_app(config: AppConfig) -> int:
                 key = cv2.waitKey(1) & 0xFF
                 if key in (27, ord("q")):
                     break
+                elif key == ord("r"):
+                    board_estimator = BoardStateEstimator(
+                        minimum_confidence=config.board_min_confidence,
+                        smoothing_window=config.smoothing_window,
+                    )
+                    geometry_tracker = BoardGeometryTracker()
+                    last_signature = None
+                    if analyze_frame.__defaults__ is not None:
+                        analyze_frame.__defaults__[-1][:] = [None, None]
+                    print("[game] Board reset.")
 
     finally:
         session.release()
@@ -463,6 +555,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         headless=args.headless,
         device=args.device,
         npu=args.npu,
+        gui=args.gui,
     )
     if args.gui == "tkinter":
         from src.gui.tkinter_app import run_tkinter_app
