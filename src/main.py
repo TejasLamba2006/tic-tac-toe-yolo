@@ -157,9 +157,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fps", type=int, default=30,
                         help="Requested camera frame rate")
     parser.add_argument("--confidence-threshold", type=float,
-                        default=0.25, help="YOLO confidence threshold")
+                        default=0.70, help="YOLO confidence threshold")
     parser.add_argument("--board-min-confidence", type=float,
-                        default=0.15, help="Minimum confidence required for a cell to stay in the matrix")
+                        default=0.50, help="Minimum confidence required for a cell to stay in the matrix")
     parser.add_argument("--iou-threshold", type=float,
                         default=0.45, help="YOLO IoU threshold")
     parser.add_argument("--image-size", type=int, default=320,
