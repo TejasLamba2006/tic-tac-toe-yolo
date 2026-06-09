@@ -27,7 +27,7 @@ import cv2
 import numpy as np
 
 # Local modules
-import comms
+from src.board import comms
 import camera_controller
 import renderer
 from vision import (
@@ -57,20 +57,20 @@ class TicTacToeApp:
 
         # Color assignment (CLI configurable)
         self.user_sym = cfg.user_color   # 'R' or 'Y'
-        self.ai_sym   = cfg.ai_color     # 'Y' or 'R'
+        self.ai_sym = cfg.ai_color     # 'Y' or 'R'
         assert self.user_sym != self.ai_sym, "--user-color and --ai-color must differ"
 
         # Sub-systems
         self.vision = VisionSystem(
-            weights_path          = cfg.weights,
-            width                 = cfg.width,
-            height                = cfg.height,
-            fps                   = cfg.fps,
-            confidence_threshold  = cfg.confidence,
-            iou_threshold         = cfg.iou,
-            image_size            = cfg.image_size,
-            smoothing_window      = cfg.smoothing,
-            use_npu               = cfg.npu,
+            weights_path=cfg.weights,
+            width=cfg.width,
+            height=cfg.height,
+            fps=cfg.fps,
+            confidence_threshold=cfg.confidence,
+            iou_threshold=cfg.iou,
+            image_size=cfg.image_size,
+            smoothing_window=cfg.smoothing,
+            use_npu=cfg.npu,
         )
         self.board_detector = BoardDetector()
         self.board_estimator = BoardStateEstimator(
@@ -78,17 +78,19 @@ class TicTacToeApp:
             smoothing_window=cfg.smoothing,
         )
         self.geometry_tracker = BoardGeometryTracker()
-        self.cam_ctrl  = camera_controller.CameraController(cfg.width, cfg.height)
-        self.game      = TicTacToeGame(user_sym=self.user_sym, ai_sym=self.ai_sym)
+        self.cam_ctrl = camera_controller.CameraController(
+            cfg.width, cfg.height)
+        self.game = TicTacToeGame(user_sym=self.user_sym, ai_sym=self.ai_sym)
 
         # UI IPC
         self._ui_started = False
         self.should_exit = False
 
         # Stability gate — board must be stable N frames before we act
-        self.required_stable_frames   = cfg.stable_frames
-        self._stable_count            = 0
-        self._last_stable_board: List[List[str]] = [[EMPTY] * 3 for _ in range(3)]
+        self.required_stable_frames = cfg.stable_frames
+        self._stable_count = 0
+        self._last_stable_board: List[List[str]] = [
+            [EMPTY] * 3 for _ in range(3)]
 
         # User-move confirmation state
         self._pending_user_move: Optional[Tuple[int, int]] = None
@@ -96,26 +98,26 @@ class TicTacToeApp:
         self._user_move_required_stable = cfg.stable_frames
 
         # AI move confirmation state (wait for YOLO to see the ball placed)
-        self._waiting_ai_confirm        = False
-        self._ai_confirm_stable         = 0
-        self._ai_confirm_required       = 20
+        self._waiting_ai_confirm = False
+        self._ai_confirm_stable = 0
+        self._ai_confirm_required = 20
         self._ai_target_cell: Optional[Tuple[int, int]] = None
 
         # Computer move delay after user moves
-        self._waiting_computer_turn     = False
-        self._computer_move_time        = 0.0
-        self._computer_move_delay       = cfg.ai_delay
+        self._waiting_computer_turn = False
+        self._computer_move_time = 0.0
+        self._computer_move_delay = cfg.ai_delay
 
         # Game flow flags
         self.board_needs_clearing = False
-        self._board_clear_count   = 0
+        self._board_clear_count = 0
         self.mode = 0  # 0=preview/game (combined), 1=paused, 2=calibration
         self._calibration_stable_count = 0
 
         # FPS tracking
-        self._fps_start    = time.time()
-        self._fps_count    = 0
-        self._current_fps  = 0.0
+        self._fps_start = time.time()
+        self._fps_count = 0
+        self._current_fps = 0.0
 
         # Board flip rotation (toggled by 'b' key or GUI button)
         self._board_rotation = 0
@@ -154,7 +156,8 @@ class TicTacToeApp:
         cv2.namedWindow(window, cv2.WINDOW_NORMAL)
 
         print("\n[KEYS]  q/ESC=quit  r=reset  b=rotate board  p=pause  m=manual")
-        print(f"[INFO]  TICTACTOE_DEBUG={os.environ.get('TICTACTOE_DEBUG', '0')}\n")
+        print(
+            f"[INFO]  TICTACTOE_DEBUG={os.environ.get('TICTACTOE_DEBUG', '0')}\n")
 
         comms.send_ui_update("start")
         comms.send_ui_update("turn X")
@@ -193,31 +196,35 @@ class TicTacToeApp:
                 if analysis.board_result.found and not analysis.board_result.fallback:
                     self._calibration_stable_count += 1
                 else:
-                    self._calibration_stable_count = max(0, self._calibration_stable_count - 1)
+                    self._calibration_stable_count = max(
+                        0, self._calibration_stable_count - 1)
 
                 if self._calibration_stable_count >= 15:
                     self.mode = 0
                     self._calibration_stable_count = 0
-                    print("[APP] Automatic board detection calibrated and locked in!")
+                    print(
+                        "[APP] Automatic board detection calibrated and locked in!")
                     comms.send_ui_update("CALIBRATION_DONE")
-                
+
                 board_stable = False
             else:
                 # ---- Board stability gate ----------------------------------
                 board_changed = (raw_board != self._last_stable_board)
                 if board_changed:
-                    self._stable_count      = 0
+                    self._stable_count = 0
                     self._last_stable_board = [row[:] for row in raw_board]
                 else:
                     self._stable_count += 1
 
-                board_stable = (self._stable_count >= self.required_stable_frames)
+                board_stable = (self._stable_count >=
+                                self.required_stable_frames)
 
                 # ---- Validate board ----------------------------------------
-                valid, inv_reason = validate_board(raw_board, self.user_sym, self.ai_sym)
+                valid, inv_reason = validate_board(
+                    raw_board, self.user_sym, self.ai_sym)
                 if not valid:
                     self.game.game_status_msg = f"Invalid Board"
-                    self.game.suggested_move  = None
+                    self.game.suggested_move = None
                     if os.environ.get("TICTACTOE_DEBUG"):
                         print(f"[VALIDATE] INVALID: {inv_reason}")
                 else:
@@ -226,7 +233,8 @@ class TicTacToeApp:
 
                 # ---- Update Minimax suggestion ----------------------------
                 if analysis.decision.recommendation is not None:
-                    self.game.suggested_move = (analysis.decision.recommendation.row, analysis.decision.recommendation.col)
+                    self.game.suggested_move = (
+                        analysis.decision.recommendation.row, analysis.decision.recommendation.col)
                 else:
                     self.game.suggested_move = None
                 self.game.game_status_msg = analysis.decision.message
@@ -255,11 +263,13 @@ class TicTacToeApp:
             if self.mode == 2:
                 display = frame.copy()
                 if analysis.board_result.found:
-                    cv2.polylines(display, [analysis.board_result.corners.astype(np.int32)], True, (0, 255, 0), 3, cv2.LINE_AA)
+                    cv2.polylines(display, [analysis.board_result.corners.astype(
+                        np.int32)], True, (0, 255, 0), 3, cv2.LINE_AA)
                 renderer.draw_calibration_overlay(
                     display,
                     mode=self.mode,
-                    detected_count=len([det for det in detections if det.label in ("red_ball", "yellow_ball")]),
+                    detected_count=len(
+                        [det for det in detections if det.label in ("red_ball", "yellow_ball")]),
                     grid_centers=None,
                     grid_radius=0,
                     stable_count=self._calibration_stable_count,
@@ -276,7 +286,8 @@ class TicTacToeApp:
             cv2.imshow(window, display)
 
             # Stream rendered frame to UI
-            ret, jpeg_bytes = cv2.imencode(".jpg", display, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            ret, jpeg_bytes = cv2.imencode(
+                ".jpg", display, [cv2.IMWRITE_JPEG_QUALITY, 80])
             if ret:
                 comms.send_ui_frame(jpeg_bytes.tobytes())
 
@@ -285,8 +296,8 @@ class TicTacToeApp:
             if self._fps_count >= 30:
                 elapsed = time.time() - self._fps_start
                 self._current_fps = 30 / elapsed if elapsed > 0 else 0.0
-                self._fps_start   = time.time()
-                self._fps_count   = 0
+                self._fps_start = time.time()
+                self._fps_count = 0
 
             # ---- Start UI subprocess once ----------------------------
             if not self._ui_started:
@@ -318,13 +329,23 @@ class TicTacToeApp:
                 manual_mode = not manual_mode
                 print(f"[APP] Manual mode: {manual_mode}")
             elif key == ord("=") or key == ord("+"):
-                if self.cam_ctrl.zoom_in(): self._sync_trackbars()
+                if self.cam_ctrl.zoom_in():
+                    self._sync_trackbars()
             elif key == ord("-"):
-                if self.cam_ctrl.zoom_out(): self._sync_trackbars()
-            elif key == 82:  self.cam_ctrl.pan_up();    self._sync_trackbars()
-            elif key == 84:  self.cam_ctrl.pan_down();  self._sync_trackbars()
-            elif key == 81:  self.cam_ctrl.pan_left();  self._sync_trackbars()
-            elif key == 83:  self.cam_ctrl.pan_right(); self._sync_trackbars()
+                if self.cam_ctrl.zoom_out():
+                    self._sync_trackbars()
+            elif key == 82:
+                self.cam_ctrl.pan_up()
+                self._sync_trackbars()
+            elif key == 84:
+                self.cam_ctrl.pan_down()
+                self._sync_trackbars()
+            elif key == 81:
+                self.cam_ctrl.pan_left()
+                self._sync_trackbars()
+            elif key == 83:
+                self.cam_ctrl.pan_right()
+                self._sync_trackbars()
             elif key == ord("f"):
                 self.cam_ctrl.toggle_flip()
 
@@ -373,7 +394,7 @@ class TicTacToeApp:
 
         elif event == "invalid":
             self.game.game_status_msg = "Invalid Board"
-            self.game.suggested_move  = None
+            self.game.suggested_move = None
 
     def _confirm_user_move(self, detected_board: List[List[str]]) -> None:
         """Apply the newly detected user move to the internal board."""
@@ -383,16 +404,16 @@ class TicTacToeApp:
                 if (self.game.board[r][c] == EMPTY
                         and detected_board[r][c] == self.user_sym):
                     print(f"[APP] ✅ User move confirmed: ({r},{c})")
-                    self.game.board[r][c]  = self.user_sym
+                    self.game.board[r][c] = self.user_sym
                     self.game.current_player = self.ai_sym
-                    self._stable_count     = 0
+                    self._stable_count = 0
                     comms.send_ui_update(f"move {r} {c} X")
                     comms.send_ui_update("turn O")
 
                     if not self.game.check_game_end():
                         # Schedule AI response
                         self._waiting_computer_turn = True
-                        self._computer_move_time    = time.time() + self._computer_move_delay
+                        self._computer_move_time = time.time() + self._computer_move_delay
                     return
 
     def _tick_computer_move(self) -> None:
@@ -411,7 +432,8 @@ class TicTacToeApp:
             return
 
         row, col = self.game.suggested_move
-        print(f"[APP] 🤖 AI move: ({row},{col})  [{self.game.suggested_status}]")
+        print(
+            f"[APP] 🤖 AI move: ({row},{col})  [{self.game.suggested_status}]")
 
         # Send robot arm command
         map_grid = [[9, 8, 7], [6, 5, 4], [3, 2, 1]]
@@ -419,16 +441,16 @@ class TicTacToeApp:
 
         # Update internal board immediately
         self.game.board[row][col] = self.ai_sym
-        self.game.current_player  = self.user_sym
-        self.game.suggested_move  = None
+        self.game.current_player = self.user_sym
+        self.game.suggested_move = None
 
         comms.send_ui_update(f"move {row} {col} O")
         comms.send_ui_update("turn X")
 
         # Start visual confirmation (wait for YOLO to see the ball)
         self._waiting_ai_confirm = True
-        self._ai_target_cell     = (row, col)
-        self._ai_confirm_stable  = 0
+        self._ai_target_cell = (row, col)
+        self._ai_confirm_stable = 0
 
         self.game.check_game_end()
 
@@ -445,8 +467,8 @@ class TicTacToeApp:
         if self._ai_confirm_stable >= self._ai_confirm_required:
             print(f"[APP] ✅ AI placement confirmed at ({r},{c})")
             self._waiting_ai_confirm = False
-            self._ai_target_cell     = None
-            self._ai_confirm_stable  = 0
+            self._ai_target_cell = None
+            self._ai_confirm_stable = 0
 
     def _confirm_ai_placement(self, detected: List[List[str]]) -> None:
         pass  # handled by _tick_ai_confirm
@@ -459,14 +481,14 @@ class TicTacToeApp:
         print("[APP] 🔄 Game reset")
         self.game.reset()
         self.vision.reset_estimator()
-        self._stable_count             = 0
-        self._last_stable_board        = [[EMPTY] * 3 for _ in range(3)]
-        self._waiting_computer_turn    = False
-        self._waiting_ai_confirm       = False
-        self._ai_target_cell           = None
-        self._ai_confirm_stable        = 0
-        self._pending_user_move        = None
-        self._pending_user_stable      = 0
+        self._stable_count = 0
+        self._last_stable_board = [[EMPTY] * 3 for _ in range(3)]
+        self._waiting_computer_turn = False
+        self._waiting_ai_confirm = False
+        self._ai_target_cell = None
+        self._ai_confirm_stable = 0
+        self._pending_user_move = None
+        self._pending_user_stable = 0
 
     # ------------------------------------------------------------------
     # UI subprocess
@@ -522,7 +544,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="YOLO input resolution")
     p.add_argument("--smoothing",    type=int,   default=5,
                    help="Board-state smoothing window (frames)")
-    p.add_argument("--stable-frames",type=int,   default=10,
+    p.add_argument("--stable-frames", type=int,   default=10,
                    help="Frames board must be stable before acting")
     p.add_argument("--ai-delay",     type=float, default=1.5,
                    help="Seconds to wait before AI sends its move command")
@@ -533,7 +555,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     parser = build_parser()
-    cfg    = parser.parse_args()
+    cfg = parser.parse_args()
 
     # Validate color assignment
     if cfg.user_color == cfg.ai_color:
