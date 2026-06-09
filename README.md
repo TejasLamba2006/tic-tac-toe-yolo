@@ -1,6 +1,6 @@
 # Tic-Tac-Toe YOLOv8 Model
 
-A YOLOv8n object detection model trained to classify the state of each cell on a physical Tic-Tac-Toe board. Designed to run on both Windows (development) and the **STM32MP257** embedded platform with NPU acceleration.
+A YOLOv8n object detection model trained to classify the state of each cell on a physical Tic-Tac-Toe board.
 
 ---
 

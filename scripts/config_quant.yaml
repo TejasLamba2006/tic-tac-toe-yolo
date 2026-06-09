@@ -6,9 +6,9 @@ model:
 
 quantization:
   fake: False
-  quantization_type: per_tensor
-  quantization_input_type: int8
-  quantization_output_type: int8
+  quantization_type: per_channel
+  quantization_input_type: uint8
+  quantization_output_type: float
   calib_dataset_path: C:/Users/Tejas/Desktop/Source-Codes/Internships/STMicroelectronics/STM32M257f-dk-x-linux-ai/dataset4/images
   export_path: ./quantized_models
 
