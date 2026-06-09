@@ -1,520 +1,613 @@
+#!/usr/bin/env python3
+"""
+ui.py — GTK3 live-frame display for the TicTacToe demo.
+
+Protocol (stdin, binary mode):
+  Text commands  : UTF-8 lines terminated by \\n
+                   move <r> <c> <X|O>
+                   reset
+                   CALIBRATION_DONE
+                   CHEAT_DETECTED
+                   BOARD_NOT_CLEAR
+                   close
+  Binary frames  : b'FRAME <size>\\n' followed by <size> raw JPEG bytes
+
+The parent process (tictactoe.py) opens this subprocess WITHOUT an
+encoding kwarg, so stdin/stdout are raw byte streams.
+"""
+
 import gi
+import os
+import sys
 import threading
 import time
-import sys
-import subprocess
+
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, Gdk, GLib
+from gi.repository import GLib, Gdk, GdkPixbuf, Gtk
 
-NAVY = "#001F54"
-RED = "#FF4545"
-YELLOW = "#FFD600"
-EMPTY_BTN_BG = "#FFFFFF"
-LIGHT_RED_BG = "#E89090"
-LIGHT_YELLOW_BG = "#FFE68C"
-GREEN_WIN = "#3CB371"
-RED_LOSS = "#B22222"
-GRAY_TIE = "#5A5A5A"
+# ---------------------------------------------------------------------------
+# Colour palette
+# ---------------------------------------------------------------------------
+NAVY          = "#001F54"
+RED           = "#FF4545"
+YELLOW        = "#FFD600"
+GREEN_WIN     = "#3CB371"
+RED_LOSS      = "#B22222"
+GRAY_TIE      = "#5A5A5A"
+PANEL_BG      = "#0D1B2A"
+ACCENT        = "#00D4FF"
 
+# ---------------------------------------------------------------------------
+# CSS
+# ---------------------------------------------------------------------------
+GLOBAL_CSS = b"""
+* { font-family: 'Inter', 'Roboto', 'DejaVu Sans', sans-serif; }
 
-RESTART_CSS = b"""
-button.restart-modern {
-    background: linear-gradient(90deg, #f8f8f8 70%, #e6e9ef 100%);
-    color: #001F54;
-    font-size: 26px;
-    font-weight: bold;
-    border-radius: 16px;
-    border: 2px solid #e0e7ef;
-    box-shadow: 0 4px 12px #e0e0ee55;
-    margin-top: 20px;
-    margin-bottom: 10px;
-    letter-spacing: 1px;
-    padding: 12px 0;
-    transition: background 0.2s;
+window {
+    background-color: #0D1B2A;
 }
-button.restart-modern:hover {
-    background: linear-gradient(90deg, #e1f5fe 60%, #b3e5fc 100%);
-    color: #01579b;
-    border: 2px solid #90caf9;
+
+/* ---- info panel ---- */
+#info-panel {
+    background-color: #131F30;
+    border-left: 2px solid #1E3050;
+    padding: 20px 16px;
+}
+
+/* ---- title ---- */
+#title-label {
+    color: #00D4FF;
+    font-size: 28px;
+    font-weight: bold;
+    letter-spacing: 2px;
+}
+
+/* ---- status card ---- */
+#status-card {
+    background-color: #1A2840;
+    border-radius: 12px;
+    border: 1px solid #243555;
+    padding: 14px 18px;
+    margin: 8px 0;
+}
+
+/* ---- turn label ---- */
+#turn-label {
+    font-size: 22px;
+    font-weight: bold;
+    color: #E0F4FF;
+}
+
+/* ---- status label ---- */
+#status-label {
+    font-size: 18px;
+    color: #90BCDC;
+}
+
+/* ---- move label ---- */
+#move-label {
+    font-size: 16px;
+    color: #6A8FAF;
+}
+
+/* ---- separator ---- */
+.hr {
+    background-color: #1E3050;
+    min-height: 1px;
+}
+
+/* ---- action button (Calibrate / Start / Restart) ---- */
+button.action-btn {
+    background: linear-gradient(135deg, #0079D3 0%, #00B4FF 100%);
+    color: white;
+    font-size: 20px;
+    font-weight: bold;
+    border-radius: 14px;
+    border: none;
+    padding: 14px 0;
+    margin: 6px 0;
+    box-shadow: 0 4px 18px #0079D355;
+    transition: background 0.18s, box-shadow 0.18s;
+}
+button.action-btn:hover {
+    background: linear-gradient(135deg, #00B4FF 0%, #0079D3 100%);
+    box-shadow: 0 6px 22px #00B4FF66;
+}
+button.action-btn:disabled {
+    background: #243555;
+    color: #4A6080;
+    box-shadow: none;
+}
+
+/* ---- stop/resume button ---- */
+button.stop-btn {
+    background: linear-gradient(135deg, #8B0000 0%, #D32F2F 100%);
+    color: white;
+    font-size: 20px;
+    font-weight: bold;
+    border-radius: 14px;
+    border: none;
+    padding: 14px 0;
+    margin: 6px 0;
+    box-shadow: 0 4px 18px #D32F2F44;
+    transition: background 0.18s;
+}
+button.stop-btn:hover {
+    background: linear-gradient(135deg, #D32F2F 0%, #F44336 100%);
+}
+button.stop-btn:disabled {
+    background: #243555;
+    color: #4A6080;
+    box-shadow: none;
+}
+
+/* ---- close button ---- */
+button.close-btn {
+    background: transparent;
+    color: #6A8FAF;
+    font-size: 22px;
+    border: none;
+    border-radius: 8px;
+    padding: 4px 10px;
+}
+button.close-btn:hover {
+    background: #B71C1C22;
+    color: #EF5350;
+}
+
+/* ---- live-feed placeholder ---- */
+#feed-placeholder {
+    background-color: #060E1A;
+    color: #1E3050;
+    font-size: 18px;
+}
+
+/* ---- overlay popup ---- */
+#popup-label {
+    font-weight: bold;
 }
 """
 
-class TicTacToeGame(Gtk.Window):
+
+# ---------------------------------------------------------------------------
+# Main Window
+# ---------------------------------------------------------------------------
+
+class TicTacToeUI(Gtk.Window):
     def __init__(self):
         super().__init__()
         self.set_decorated(False)
-        self.set_focus_on_map(True)
-        self.set_accept_focus(True)
         self.fullscreen()
         self.set_keep_above(True)
         self.present()
-        self.set_type_hint(Gdk.WindowTypeHint.SPLASHSCREEN)
-        self.grab_focus()
-        threading.Thread(target=self.keep_raising, daemon=True).start()
 
-        self.current_player = "X"
-        self.board = [[None for _ in range(3)] for _ in range(3)]
-        self.game_active = True
-        self.move_count = 0
-
-        self.restart_css_provider = Gtk.CssProvider()
-        self.restart_css_provider.load_from_data(RESTART_CSS)
-        self.bg_css_provider = Gtk.CssProvider()
-
-        self.calibration_done = False # Game starts only after calibration
-
-
-        main_container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-        self.add(main_container)
-
-        title_bar = Gtk.EventBox()
-        titlebar_hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-        def drag_begin(widget, event):
-            self.begin_move_drag(event.button, int(event.x_root), int(event.y_root), event.time)
-        title_bar.connect('button-press-event', drag_begin)
-        self.title_label = Gtk.Label()
-        self.title_label.set_markup(
-            f'<span foreground="{NAVY}" font_weight="bold" font="32">TicTacToe Demo</span>')
-        self.title_label.set_halign(Gtk.Align.CENTER)
-        titlebar_hbox.pack_start(self.title_label, True, True, 0)
-        close_btn = Gtk.Button()
-        close_btn.set_tooltip_text("Close")
-        close_btn.set_size_request(57, 54)
-        close_icon = Gtk.Label()
-        close_icon.set_markup(f'<span foreground="{NAVY}" font="30" weight="bold">X</span>')
-        close_btn.add(close_icon)
-        close_btn.set_relief(Gtk.ReliefStyle.NONE)
-        close_btn.connect("clicked", self.close_gui)
-        titlebar_hbox.pack_end(close_btn, False, False, 12)
-        titlebar_hbox.set_size_request(-1, 54)
-        title_bar.add(titlebar_hbox)
-        main_container.pack_start(title_bar, False, False, 0)
-
-        content_hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=32)
-        main_container.pack_start(content_hbox, True, True, 0)
-
-        game_container = Gtk.Frame()
-        game_container.set_shadow_type(Gtk.ShadowType.ETCHED_OUT)
-        content_hbox.pack_start(game_container, True, True, 0)
-
-        inner_game_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
-        inner_game_box.set_margin_top(12)
-        inner_game_box.set_margin_bottom(12)
-        inner_game_box.set_margin_start(12)
-        inner_game_box.set_margin_end(12)
-        game_container.add(inner_game_box)
-
-        self.game_grid = Gtk.Grid()
-        self.game_grid.set_row_spacing(7)
-        self.game_grid.set_column_spacing(7)
-        inner_game_box.pack_start(self.game_grid, True, True, 0)
-
-        self.buttons = []
-        for i in range(3):
-            row = []
-            for j in range(3):
-                button = Gtk.Button(label="")
-                button.set_hexpand(True)
-                button.set_vexpand(True)
-                button.set_size_request(120, 120)
-                self.game_grid.attach(button, j, i, 1, 1)
-                row.append(button)
-            self.buttons.append(row)
-
-        info_container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=20)
-        info_container.set_size_request(500, -1)
-        content_hbox.pack_start(info_container, False, False, 0)
-        info_container.set_margin_top(8)
-
-        self.subtitle_label = Gtk.Label()
-        self.subtitle_label.set_markup(
-            f'<span foreground="{NAVY}" font="22">TicTacToe</span>'
-        )
-        info_container.pack_start(self.subtitle_label, False, False, 0)
-
-        self.turn_label = Gtk.Label()
-        self.turn_label.set_justify(Gtk.Justification.CENTER)
-        self.turn_label.set_markup(self.get_turn_label_markup())
-        info_container.pack_start(self.turn_label, False, False, 0)
-
-        self.status_label = Gtk.Label()
-        self.status_label.set_markup(
-            f'<span foreground="{NAVY}" font="28">Not Calibrated</span>')
-        self.status_label.set_justify(Gtk.Justification.CENTER)
-
-        self.status_label.set_line_wrap(True)
-        self.status_label.set_line_wrap_mode(Gtk.WrapMode.WORD)
-        self.status_label.set_size_request(500, 72)
-        info_container.pack_start(self.status_label, False, False, 6)
-
-        self.move_label = Gtk.Label()
-        self.move_label.set_markup(self.get_move_label_markup())
-        info_container.pack_start(self.move_label, False, False, 0)
-
-        badge_hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        info_container.pack_start(badge_hbox, False, False, 0)
-
-        self.player_robot_label = Gtk.Label()
-        badge_hbox.pack_start(self.player_robot_label, True, True, 0)
-        self.player_user_label = Gtk.Label()
-        badge_hbox.pack_start(self.player_user_label, True, True, 0)
-        self.update_player_badges()
-
-        # Spacer to push buttons to the bottom of the container
-        spacer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        info_container.pack_start(spacer, True, True, 0)
-
-        # Stop/Resume Button Row (Placed above Restart)
-        stop_hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-        self.stop_button = Gtk.Button(label="Stop")
-        self.stop_button.set_size_request(500, 68)
-        self.stop_button.get_style_context().add_class("restart-modern") 
-        self.stop_button.set_sensitive(False)
-        self.stop_button.connect("clicked", self.on_stop_clicked)
-        
-        # Style for stop button
-        self.stop_css_provider = Gtk.CssProvider()
-        STOP_CSS = b"""
-        button.stop-btn {
-            background: #FFCDD2;
-            color: #B71C1C;
-            font-size: 26px;
-            font-weight: bold;
-            border-radius: 16px;
-            border: 2px solid #EF9A9A;
-            box-shadow: 0 4px 12px #e0e0ee55;
-            padding: 12px 0;
-        }
-        button.stop-btn:hover {
-            background: #EF9A9A;
-            color: #B71C1C;
-        }
-        """
-        self.stop_css_provider.load_from_data(STOP_CSS)
-        self.stop_button.get_style_context().add_class("stop-btn")
-        Gtk.StyleContext.add_provider(
-            self.stop_button.get_style_context(),
-            self.stop_css_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
-        )
-        stop_hbox.pack_start(self.stop_button, True, True, 0)
-        info_container.pack_start(stop_hbox, False, False, 10)
-
-        # Restart/Calibrate Button Row (Bottom)
-        restart_hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-        self.action_button = Gtk.Button(label="Calibrate")
-        self.action_button.set_size_request(500, 68)
-        self.action_button.get_style_context().add_class("restart-modern")
-        self.action_button.set_can_focus(False)
-        self.action_button.connect("clicked", self.on_action_clicked)
-        Gtk.StyleContext.add_provider(
-            self.action_button.get_style_context(),
-            self.restart_css_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
-        )
-        restart_hbox.pack_start(self.action_button, True, True, 0)
-        info_container.pack_start(restart_hbox, False, False, 16)
-
-
-
-        self.update_board_visual()
-        threading.Thread(target=self.terminal_info_loop, daemon=True).start()
-        self.update_app_bg()
-        threading.Thread(target=self.stdin_listener, daemon=True).start()
-
-    def keep_raising(self):
-        while True:
-            time.sleep(0.5)
-            GLib.idle_add(self.present)
-            GLib.idle_add(self.grab_focus)
-            GLib.idle_add(self.set_keep_above, True)
-
-    def on_resize(self, widget, allocation):
-        side = min(allocation.width // 2, allocation.height - 48)
-        btn_size = int(0.84 * (side // 3))
-        btn_font = int(btn_size * 0.75)  # Increased from 0.55 to 0.75 for bigger markers
-        for i, row in enumerate(self.buttons):
-            for j, btn in enumerate(row):
-                btn.set_size_request(btn_size, btn_size)
-                style = Gtk.CssProvider()
-                if self.board[i][j] == "X":
-                    style.load_from_data(f"button {{background: {RED}; color: {NAVY}; font-size: {btn_font}px; font-weight: bold; border: 3px solid {NAVY}; border-radius: 13px;}}".encode())
-                elif self.board[i][j] == "O":
-                    style.load_from_data(f"button {{background: {YELLOW}; color: {NAVY}; font-size: {btn_font}px; font-weight: bold; border: 3px solid {NAVY}; border-radius: 13px;}}".encode())
-                else:
-                    style.load_from_data(f"button {{background: {EMPTY_BTN_BG}; color: {NAVY}; font-size: {btn_font}px; font-weight: bold; border: 3px solid {NAVY}; border-radius: 13px;}}".encode())
-                Gtk.StyleContext.add_provider(
-                    btn.get_style_context(), style, Gtk.STYLE_PROVIDER_PRIORITY_USER)
-
-    def stdin_listener(self):
-        while True:
-            line = sys.stdin.readline()
-            if not line:
-                break
-            cmd = line.strip()
-            if cmd.startswith("move "):
-                parts = cmd.split()
-                if len(parts) == 4:
-                    try:
-                        x = int(parts[1])
-                        y = int(parts[2])
-                        player = parts[3].upper()
-                        if player in ("X", "O"):
-                            GLib.idle_add(self.remote_move, x, y, player)
-                    except:
-                        pass
-            elif cmd == "reset":
-                GLib.idle_add(self.restart_game, None)
-            elif cmd == "CALIBRATION_DONE":
-                GLib.idle_add(self.on_calibration_done)
-            elif cmd == "CHEAT_DETECTED":
-                GLib.idle_add(self.on_cheat_detected)
-            elif cmd == "BOARD_NOT_CLEAR":
-                GLib.idle_add(self.on_board_not_clear)
-            elif cmd == "close":
-                GLib.idle_add(self.close_gui)
-                break
-
-
-    def remote_move(self, x, y, player):
-        if (
-            self.game_active and 0 <= x < 3 and 0 <= y < 3 and
-            self.board[x][y] is None):
-            self.current_player = player
-            self.on_cell_clicked(x, y)
-
-    def update_app_bg(self):
-        bgcol = LIGHT_RED_BG if self.current_player == "X" else LIGHT_YELLOW_BG
-        self.bg_css_provider.load_from_data(
-            f"window {{ background-color: {bgcol}; }}".encode())
+        # --- Apply global CSS ---
+        css_prov = Gtk.CssProvider()
+        css_prov.load_from_data(GLOBAL_CSS)
         Gtk.StyleContext.add_provider_for_screen(
             Gdk.Screen.get_default(),
-            self.bg_css_provider,
+            css_prov,
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
         )
 
-    def get_turn_label_markup(self):
-        if self.current_player == "X":
-            return (
-                f'<span foreground="{NAVY}" font="28"><b>Turn: X - Human</b></span>'
-            )
+        # --- App state ---
+        self.calibration_done = False
+        self.game_active      = False
+        self.current_player   = "X"
+        self.move_count       = 0
+        self.board            = [[None]*3 for _ in range(3)]
+
+        # --- Build layout ---
+        self._build_layout()
+        self.show_all()
+
+        # --- Background threads ---
+        threading.Thread(target=self._keep_raised,  daemon=True).start()
+        threading.Thread(target=self._stdin_listener, daemon=True).start()
+
+    # -----------------------------------------------------------------------
+    # Layout
+    # -----------------------------------------------------------------------
+
+    def _build_layout(self):
+        """
+        ┌──────────────────────────────┬─────────────────┐
+        │  LIVE CAMERA FEED (Gtk.Image)│  Info / Controls│
+        └──────────────────────────────┴─────────────────┘
+        """
+        root = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        self.add(root)
+
+        # ---- Left: live feed ----
+        feed_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        feed_box.set_hexpand(True)
+        feed_box.set_vexpand(True)
+        root.pack_start(feed_box, True, True, 0)
+
+        self.feed_image = Gtk.Image()
+        self.feed_image.set_name("feed-placeholder")
+        self.feed_image.set_hexpand(True)
+        self.feed_image.set_vexpand(True)
+        # Show a placeholder until the first frame arrives
+        self._show_placeholder()
+        feed_box.pack_start(self.feed_image, True, True, 0)
+
+        # ---- Right: info panel ----
+        panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        panel.set_name("info-panel")
+        panel.set_size_request(360, -1)
+        root.pack_start(panel, False, False, 0)
+
+        # Title bar row
+        title_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        title_lbl = Gtk.Label(label="TIC·TAC·TOE")
+        title_lbl.set_name("title-label")
+        title_lbl.set_halign(Gtk.Align.START)
+        title_lbl.set_hexpand(True)
+        close_btn = Gtk.Button(label="✕")
+        close_btn.set_name("close-btn")
+        close_btn.get_style_context().add_class("close-btn")
+        close_btn.connect("clicked", self._close)
+        title_row.pack_start(title_lbl, True, True, 0)
+        title_row.pack_end(close_btn, False, False, 0)
+        panel.pack_start(title_row, False, False, 12)
+
+        # Separator
+        sep = Gtk.Box()
+        sep.get_style_context().add_class("hr")
+        sep.set_size_request(-1, 1)
+        panel.pack_start(sep, False, False, 0)
+
+        # Status card
+        status_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        status_card.set_name("status-card")
+
+        self.turn_label = Gtk.Label()
+        self.turn_label.set_name("turn-label")
+        self.turn_label.set_halign(Gtk.Align.START)
+        self.turn_label.set_markup(self._turn_markup())
+        status_card.pack_start(self.turn_label, False, False, 0)
+
+        self.status_label = Gtk.Label(label="Not calibrated")
+        self.status_label.set_name("status-label")
+        self.status_label.set_halign(Gtk.Align.START)
+        self.status_label.set_line_wrap(True)
+        status_card.pack_start(self.status_label, False, False, 0)
+
+        self.move_label = Gtk.Label()
+        self.move_label.set_name("move-label")
+        self.move_label.set_halign(Gtk.Align.START)
+        self.move_label.set_markup(self._move_markup())
+        status_card.pack_start(self.move_label, False, False, 0)
+
+        panel.pack_start(status_card, False, False, 14)
+
+        # Spacer
+        panel.pack_start(Gtk.Box(), True, True, 0)
+
+        # Stop / Resume button
+        self.stop_btn = Gtk.Button(label="⏹  Stop")
+        self.stop_btn.get_style_context().add_class("stop-btn")
+        self.stop_btn.set_size_request(320, 58)
+        self.stop_btn.set_sensitive(False)
+        self.stop_btn.connect("clicked", self._on_stop)
+        panel.pack_start(self.stop_btn, False, False, 4)
+
+        # Action button (Calibrate → Start Game → Restart)
+        self.action_btn = Gtk.Button(label="⚙  Calibrate")
+        self.action_btn.get_style_context().add_class("action-btn")
+        self.action_btn.set_size_request(320, 58)
+        self.action_btn.connect("clicked", self._on_action)
+        panel.pack_start(self.action_btn, False, False, 4)
+
+        # Bottom padding
+        panel.pack_start(Gtk.Box(), False, False, 16)
+
+    # -----------------------------------------------------------------------
+    # Placeholder shown before first frame
+    # -----------------------------------------------------------------------
+
+    def _show_placeholder(self):
+        # 1×1 dark blue pixel as placeholder pixbuf
+        pb = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, False, 8, 1, 1)
+        pb.fill(0x060E1AFF)
+        self.feed_image.set_from_pixbuf(pb)
+
+    # -----------------------------------------------------------------------
+    # Frame rendering
+    # -----------------------------------------------------------------------
+
+    def _render_jpeg(self, jpeg_bytes: bytes):
+        """Load JPEG bytes into a GdkPixbuf and update the Gtk.Image widget."""
+        try:
+            loader = GdkPixbuf.PixbufLoader.new_with_type("jpeg")
+            loader.write(jpeg_bytes)
+            loader.close()
+            pixbuf = loader.get_pixbuf()
+            if pixbuf is None:
+                return
+
+            # Scale to fit the allocated area while keeping aspect ratio
+            alloc = self.feed_image.get_allocation()
+            w, h = alloc.width, alloc.height
+            if w > 4 and h > 4:
+                src_w = pixbuf.get_width()
+                src_h = pixbuf.get_height()
+                scale = min(w / src_w, h / src_h)
+                nw = max(1, int(src_w * scale))
+                nh = max(1, int(src_h * scale))
+                pixbuf = pixbuf.scale_simple(nw, nh, GdkPixbuf.InterpType.BILINEAR)
+
+            GLib.idle_add(self.feed_image.set_from_pixbuf, pixbuf)
+        except Exception as exc:
+            print(f"[UI] Frame render error: {exc}", flush=True)
+
+    # -----------------------------------------------------------------------
+    # stdin listener — runs in a daemon thread
+    # -----------------------------------------------------------------------
+
+    def _stdin_listener(self):
+        """
+        Read from binary stdin.  Two packet types:
+          1. Text command: a UTF-8 line (does NOT start with b'FRAME ')
+          2. Binary frame: line  b'FRAME <size>\\n'  then  <size> raw bytes
+        """
+        # Python reopens sys.stdin as a text stream; use the underlying buffer.
+        stdin_bin = sys.stdin.buffer
+
+        while True:
+            try:
+                header = stdin_bin.readline()
+                if not header:
+                    break  # EOF — parent closed the pipe
+
+                if header.startswith(b"FRAME "):
+                    # Binary frame packet
+                    try:
+                        size = int(header[6:].strip())
+                    except ValueError:
+                        continue
+                    data = b""
+                    remaining = size
+                    while remaining > 0:
+                        chunk = stdin_bin.read(remaining)
+                        if not chunk:
+                            break
+                        data += chunk
+                        remaining -= len(chunk)
+                    if len(data) == size:
+                        self._render_jpeg(data)
+                else:
+                    # Text command
+                    cmd = header.decode("utf-8", errors="replace").strip()
+                    if not cmd:
+                        continue
+                    GLib.idle_add(self._handle_command, cmd)
+
+            except Exception as exc:
+                print(f"[UI] stdin error: {exc}", flush=True)
+                break
+
+    # -----------------------------------------------------------------------
+    # Command dispatch
+    # -----------------------------------------------------------------------
+
+    def _handle_command(self, cmd: str):
+        if cmd.startswith("move "):
+            parts = cmd.split()
+            if len(parts) == 4:
+                try:
+                    r, c = int(parts[1]), int(parts[2])
+                    player = parts[3].upper()
+                    if player in ("X", "O") and 0 <= r < 3 and 0 <= c < 3:
+                        self._record_move(r, c, player)
+                except Exception:
+                    pass
+
+        elif cmd == "reset":
+            self._reset_state()
+
+        elif cmd == "CALIBRATION_DONE":
+            self._on_calibration_done()
+
+        elif cmd == "CHEAT_DETECTED":
+            self._on_cheat()
+
+        elif cmd == "BOARD_NOT_CLEAR":
+            self.status_label.set_markup(
+                '<span foreground="#EF5350">Clear the board first!</span>')
+
+        elif cmd.startswith("turn "):
+            p = cmd[5:].strip()
+            if p in ("X", "O"):
+                self.current_player = p
+                self.turn_label.set_markup(self._turn_markup())
+
+        elif cmd == "close":
+            self._close()
+
+        return False  # required for GLib.idle_add
+
+    # -----------------------------------------------------------------------
+    # Game state helpers
+    # -----------------------------------------------------------------------
+
+    def _record_move(self, r: int, c: int, player: str):
+        self.board[r][c] = player
+        self.move_count += 1
+        self.move_label.set_markup(self._move_markup())
+        # Check win / draw
+        if self._check_winner(player):
+            who = "Human (X)" if player == "X" else "Robot (O)"
+            self.status_label.set_markup(
+                f'<span foreground="{GREEN_WIN if player=="X" else RED_LOSS}">'
+                f'<b>{who} wins!</b></span>')
+            self.game_active = False
+            color = GREEN_WIN if player == "X" else RED_LOSS
+            msg   = "You Win! 🎉" if player == "X" else "Robot Wins!"
+            self._flash_popup(msg, color)
+        elif self.move_count >= 9:
+            self.status_label.set_markup(
+                f'<span foreground="{GRAY_TIE}"><b>It\'s a draw!</b></span>')
+            self.game_active = False
+            self._flash_popup("Draw! 🤝", GRAY_TIE)
+
+    def _reset_state(self):
+        self.board        = [[None]*3 for _ in range(3)]
+        self.current_player = "X"
+        self.move_count   = 0
+        self.game_active  = True
+        self.turn_label.set_markup(self._turn_markup())
+        self.move_label.set_markup(self._move_markup())
+        self.status_label.set_markup(
+            '<span foreground="#90BCDC">Game in progress…</span>')
+        self.action_btn.set_label("↺  Restart")
+        self.stop_btn.set_sensitive(True)
+        self.stop_btn.set_label("⏹  Stop")
+
+    def _on_calibration_done(self):
+        self.calibration_done = True
+        self.action_btn.set_label("▶  Start Game")
+        self.action_btn.set_sensitive(True)
+        self.status_label.set_markup(
+            '<span foreground="#00D4FF">Calibration done! Press Start.</span>')
+
+    def _on_cheat(self):
+        self.game_active = False
+        self.status_label.set_markup(
+            '<span foreground="#EF5350" font_weight="bold">INVALID MOVE!</span>')
+        self._flash_popup("Invalid move!", RED_LOSS)
+
+    def _check_winner(self, p: str) -> bool:
+        b = self.board
+        for r in range(3):
+            if b[r][0] == b[r][1] == b[r][2] == p: return True
+        for c in range(3):
+            if b[0][c] == b[1][c] == b[2][c] == p: return True
+        if b[0][0] == b[1][1] == b[2][2] == p: return True
+        if b[0][2] == b[1][1] == b[2][0] == p: return True
+        return False
+
+    # -----------------------------------------------------------------------
+    # Button handlers
+    # -----------------------------------------------------------------------
+
+    def _on_action(self, _btn=None):
+        label = self.action_btn.get_label()
+        if "Calibrate" in label:
+            self.status_label.set_markup(
+                '<span foreground="#00D4FF">Calibrating…</span>')
+            self.action_btn.set_label("Calibrating…")
+            self.action_btn.set_sensitive(False)
+            print("CALIBRATE", flush=True)
+
+        elif "Start" in label:
+            self._reset_state()
+            print("START_GAME", flush=True)
+
+        else:  # Restart
+            self._reset_state()
+            print("RESTARTED", flush=True)
+
+    def _on_stop(self, _btn=None):
+        if "Stop" in self.stop_btn.get_label():
+            self.stop_btn.set_label("▶  Resume")
+            print("STOP", flush=True)
         else:
-            return (
-                f'<span foreground="{NAVY}" font="28"><b>Turn: O - Robots</b></span>'
-            )
+            self.stop_btn.set_label("⏹  Stop")
+            print("RESUME", flush=True)
 
-    def get_move_label_markup(self):
-        return f'<span foreground="{NAVY}" font="22">Moves: {self.move_count} / 9</span>'
+    def _close(self, *_):
+        print("CLOSED", flush=True)
+        Gtk.main_quit()
 
-    def update_player_badges(self):
-        self.player_user_label.set_markup(
-            f'<span foreground="{NAVY}" font="18" weight="bold">X - Human</span>'
-        )
-        self.player_robot_label.set_markup(
-            f'<span foreground="{NAVY}" font="18" weight="bold">O - Robot</span>'
-        )
+    # -----------------------------------------------------------------------
+    # Markup helpers
+    # -----------------------------------------------------------------------
 
-    def show_overlay_popup(self, message, color="#3CB371", font_size=80):
+    def _turn_markup(self) -> str:
+        if self.current_player == "X":
+            return f'<span foreground="{RED}">Turn: X — Human</span>'
+        return f'<span foreground="{YELLOW}">Turn: O — Robot</span>'
+
+    def _move_markup(self) -> str:
+        return f'<span foreground="#6A8FAF">Moves: {self.move_count} / 9</span>'
+
+    # -----------------------------------------------------------------------
+    # Overlay flash popup
+    # -----------------------------------------------------------------------
+
+    def _flash_popup(self, message: str, color: str):
         popup = Gtk.Window(type=Gtk.WindowType.POPUP)
         popup.set_transient_for(self)
         popup.set_decorated(False)
-        popup.set_resizable(False)
-        popup.set_skip_taskbar_hint(True)
-        popup.set_accept_focus(False)
         popup.set_modal(True)
+        popup.set_keep_above(True)
         popup.set_position(Gtk.WindowPosition.CENTER_ALWAYS)
+
         visual = self.get_screen().get_rgba_visual()
         if visual:
             popup.set_visual(visual)
-        label = Gtk.Label()
-        label.set_markup(
-            f'<span foreground="{color}" font="{font_size}" weight="bold">{message}</span>'
-        )
-        label.set_justify(Gtk.Justification.CENTER)
-        label.set_halign(Gtk.Align.CENTER)
-        label.set_valign(Gtk.Align.CENTER)
-        overlay_box = Gtk.EventBox()
-        rgba = Gdk.RGBA(0,0,0,0)  # fully transparent
-        overlay_box.override_background_color(Gtk.StateFlags.NORMAL, rgba)
-        overlay_box.add(label)
-        popup.add(overlay_box)
-        popup.set_size_request(850, 310)
         popup.set_app_paintable(True)
-        popup.set_keep_above(True)
-        popup.set_gravity(Gdk.Gravity.CENTER)
+
+        lbl = Gtk.Label()
+        lbl.set_name("popup-label")
+        lbl.set_markup(
+            f'<span foreground="{color}" font="72" weight="bold">{message}</span>')
+        lbl.set_justify(Gtk.Justification.CENTER)
+
+        eb = Gtk.EventBox()
+        rgba = Gdk.RGBA(0, 0, 0, 0.72)
+        eb.override_background_color(Gtk.StateFlags.NORMAL, rgba)
+        eb.add(lbl)
+        popup.add(eb)
+        popup.set_size_request(780, 260)
         popup.show_all()
-        parent_x, parent_y = self.get_position()
-        parent_w, parent_h = self.get_size()
-        popup.move(
-            parent_x + (parent_w - 850) // 2,
-            parent_y + (parent_h - 310) // 2
-        )
-        flashes = [True, False, True, False, True]
-        flash_delay = int(5000 / len(flashes))
-        def flash_step(i=[0]):
-            show = flashes[i[0] % len(flashes)]
-            label.set_opacity(1.0 if show else 0.04)
+
+        # Centre on parent
+        px, py = self.get_position()
+        pw, ph = self.get_size()
+        popup.move(px + (pw - 780) // 2, py + (ph - 260) // 2)
+
+        # Flash 3 times then destroy
+        flashes = [1.0, 0.05, 1.0, 0.05, 1.0]
+        delay   = int(4800 // len(flashes))
+
+        def _step(i=[0]):
+            lbl.set_opacity(flashes[i[0] % len(flashes)])
             i[0] += 1
             if i[0] < len(flashes):
-                GLib.timeout_add(flash_delay, flash_step)
+                GLib.timeout_add(delay, _step)
                 return False
             popup.hide()
             popup.destroy()
             return False
-        flash_step()
 
-    def on_cell_clicked(self, x, y):
-        if not self.calibration_done:
-            return
-        if self.game_active and self.board[x][y] is None:
+        _step()
 
-            self.board[x][y] = self.current_player
-            self.buttons[x][y].set_label(self.current_player)
-            self.move_count += 1
-            self.update_board_visual()
-            if self.check_winner(self.current_player):
-                user_won = self.current_player == "X"
-                win_msg = "User (X) Wins!" if user_won else "Robotic Arm (O) Wins!"
-                self.status_label.set_markup(
-                    f'<span foreground="{NAVY}" font="28" weight="bold">{win_msg}</span>')
-                self.game_active = False
-                if user_won:
-                    self.show_overlay_popup("You Win!", color=GREEN_WIN, font_size=88)
-                else:
-                    self.show_overlay_popup("You Lost", color=RED_LOSS, font_size=88)
-            elif self.move_count == 9:
-                self.status_label.set_markup(
-                    f'<span foreground="{NAVY}" font="24"><b>It\'s a DRAW!</b></span>')
-                self.game_active = False
-                self.show_overlay_popup("Tie!", color=GRAY_TIE, font_size=85)
-            else:
-                self.current_player = "O" if self.current_player == "X" else "X"
-                self.turn_label.set_markup(self.get_turn_label_markup())
-                self.move_label.set_markup(self.get_move_label_markup())
-                self.update_app_bg()
+    # -----------------------------------------------------------------------
+    # Keep raised
+    # -----------------------------------------------------------------------
 
-    def check_winner(self, player):
-        for row in self.board:
-            if row[0] == row[1] == row[2] == player: return True
-        for col in range(3):
-            if self.board[0][col] == self.board[1][col] == self.board[2][col] == player: return True
-        if self.board[0][0] == self.board[1][1] == self.board[2][2] == player: return True
-        if self.board[0][2] == self.board[1][1] == self.board[2][0] == player: return True
-        return False
-
-    def on_action_clicked(self, button=None):
-        if not self.calibration_done:
-            # State: Not Calibrated -> Calibrating
-            self.status_label.set_markup(f'<span foreground="{NAVY}" font="28">Calibrating...</span>')
-            self.action_button.set_label("Calibrating...")
-            self.action_button.set_sensitive(False) # Disable while calibrating
-            print("CALIBRATE", flush=True)
-        elif self.action_button.get_label() == "Start Game":
-            # State: Calibrated -> Start Game
-            self.restart_game()
-            self.action_button.set_label("Restart Game")
-            self.stop_button.set_sensitive(True)
-            self.status_label.set_markup(f'<span foreground="{NAVY}" font="28">Game Started!</span>')
-            print("START_GAME", flush=True)
-
-        else:
-
-            # State: Game Active -> Restart
-            self.restart_game()
-            print("RESTARTED", flush=True)
-
-    def on_calibration_done(self):
-        self.calibration_done = True
-        self.action_button.set_sensitive(True)
-        self.action_button.set_label("Start Game")
-        self.status_label.set_markup(f'<span foreground="{NAVY}" font="24">Calibration Done.</span>')
-        # Do not restart automatically. User must clear board and click Start.
-
-    def on_cheat_detected(self):
-        self.game_active = False
-        self.status_label.set_markup(f'<span foreground="{RED_LOSS}" font="32" weight="bold">INVALID MOVE!</span>')
-        self.show_overlay_popup("Invalid Move!", color=RED_LOSS, font_size=88)
-
-    def on_board_not_clear(self):
-        self.status_label.set_markup(f'<span foreground="{RED_LOSS}" font="28" weight="bold">Clear Board First!</span>')
-        print("Board not clear - please remove all balls")
-
-    def close_gui(self, *args):
-        print("CLOSED", flush=True)
-        Gtk.main_quit()
-
-    def on_stop_clicked(self, button):
-        if self.stop_button.get_label() == "Stop":
-            self.stop_button.set_label("Resume")
-            print("STOP", flush=True)
-        else:
-            self.stop_button.set_label("Stop")
-            print("RESUME", flush=True)
-
-    def restart_game(self, button=None):
-        self.action_button.set_label("Restart Game")
-        self.stop_button.set_label("Stop")
-        self.stop_button.set_sensitive(True)
-        self.board = [[None for _ in range(3)] for _ in range(3)]
-        self.current_player = "X"
-        self.game_active = True
-        self.move_count = 0
-        for row in self.buttons:
-            for btn in row:
-                btn.set_label("")
-        self.turn_label.set_markup(self.get_turn_label_markup())
-        self.status_label.set_markup(
-            f'<span foreground="{NAVY}" font="19">Game in Progress...</span>')
-        self.move_label.set_markup(self.get_move_label_markup())
-        self.update_board_visual()
-        self.update_app_bg()
-
-    def update_board_visual(self):
-        for i, row in enumerate(self.buttons):
-            for j, btn in enumerate(row):
-                style = Gtk.CssProvider()
-                if self.board[i][j] == "X":
-                    btn.set_label("X")
-                    style.load_from_data(f"button {{background: {RED}; color: {NAVY}; font-size: 72px; font-weight: bold; border: 3px solid {NAVY}; border-radius: 13px; }}".encode())
-                elif self.board[i][j] == "O":
-                    btn.set_label("O")
-                    style.load_from_data(f"button {{background: {YELLOW}; color: {NAVY}; font-size: 72px; font-weight: bold; border: 3px solid {NAVY}; border-radius: 13px; }}".encode())
-                else:
-                    btn.set_label("")
-                    style.load_from_data(f"button {{background: {EMPTY_BTN_BG}; color: {NAVY}; font-weight: bold; border: 3px solid {NAVY}; border-radius: 13px;}}".encode())
-                Gtk.StyleContext.add_provider(
-                    btn.get_style_context(), style, Gtk.STYLE_PROVIDER_PRIORITY_USER)
-
-    def terminal_info_loop(self):
+    def _keep_raised(self):
         while True:
-            if hasattr(self, 'game_active'):
-                if self.game_active:
-                    turn = "X - User" if self.current_player == "X" else "O - Robotic Arm"
-                    print(f"Turn: {turn} | Moves: {self.move_count}/9")
-                    print("Current Board:")
-                    for i, row in enumerate(self.board):
-                        row_display = []
-                        for j, cell in enumerate(row):
-                            if cell is None:
-                                row_display.append(f"[{i*3+j+1}]")
-                            else:
-                                row_display.append(f" {cell} ")
-                        print("  " + " | ".join(row_display))
-                        if i < 2:
-                            print("  " + "-" * 15)
-                    print("-" * 30)
-                time.sleep(3)
-            else:
-                time.sleep(1)
+            time.sleep(0.5)
+            GLib.idle_add(self.present)
+            GLib.idle_add(self.set_keep_above, True)
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
 def main():
-    app = TicTacToeGame()
-    app.connect("destroy", Gtk.main_quit)
-    app.show_all()
+    win = TicTacToeUI()
+    win.connect("destroy", Gtk.main_quit)
     try:
         Gtk.main()
     except KeyboardInterrupt:
-        print("\nGame closed by user.")
+        print("\n[UI] Closed by user.", flush=True)
+
 
 if __name__ == "__main__":
     main()
-
-
