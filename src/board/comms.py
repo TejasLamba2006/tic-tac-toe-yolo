@@ -29,7 +29,7 @@ def init_move_process() -> None:
     global p
     try:
         p = subprocess.Popen(
-            ["python3", "move.py"],
+            ["python3", "src/board/move.py"],
             stdin=subprocess.PIPE,
             stdout=None,
             stderr=None,
