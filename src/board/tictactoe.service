@@ -1,0 +1,20 @@
+[Unit]
+Description= Camera service
+After=multi-user.target
+Requires=multi-user.target
+ 
+[Service]
+Type=exec
+Restart=no
+ExecStart=/home/root/demoupdate/run_arm/start_demo.sh
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=QT_QPA_PLATFORM=wayland
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Envirnment=GDK_BACKEND=wayland
+#Envirnment=
+#Envirnment=
+ 
+#Environment=DISPLAY=:0
+ 
+[Install]
+WantedBy=multi-user.target
