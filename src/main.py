@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +17,22 @@ from .vision.board_state import BoardObservation, BoardStateEstimator, Detection
 from .vision.camera import configure_capture, open_camera, parse_camera_source
 from .vision.perspective import PerspectiveTransform, canonical_cell_polygon, warp_image, warp_points
 from .vision.stability import BoardGeometryTracker
+
+
+def _read_cma_free_kb() -> int | None:
+    """Return ``CmaFree`` from ``/proc/meminfo`` in kB, or ``None`` if unavailable.
+
+    Used to detect CMA exhaustion during NPU model load on the STM32MP257 board.
+    Always returns ``None`` on Windows / systems without ``/proc/meminfo``.
+    """
+    try:
+        with open("/proc/meminfo") as _f:
+            for _line in _f:
+                if _line.startswith("CmaFree:"):
+                    return int(_line.split()[1])
+    except OSError:
+        pass
+    return None
 
 
 @dataclass
@@ -151,9 +168,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--board-size", type=int, default=320,
                         help="Canonical warped board size in pixels")
     parser.add_argument("--frame-width", type=int,
-                        default=1280, help="Requested capture width")
+                        default=640, help="Requested capture width")
     parser.add_argument("--frame-height", type=int,
-                        default=720, help="Requested capture height")
+                        default=480, help="Requested capture height")
     parser.add_argument("--fps", type=int, default=30,
                         help="Requested camera frame rate")
     parser.add_argument("--confidence-threshold", type=float,
@@ -320,8 +337,35 @@ def _draw_panel(frame: np.ndarray, analysis: FrameAnalysis) -> np.ndarray:
 def run_app(config: AppConfig) -> int:
     camera_source = parse_camera_source(config.camera)
     session = open_camera(camera_source, auto_max_index=config.auto_max_index)
-    configure_capture(session.capture, config.frame_width,
-                      config.frame_height, config.fps)
+    # Pass the resolved source so configure_capture can skip VIDIOC_S_FMT on
+    # V4L2/DCMIPP devices where changing resolution stops the stream silently.
+    configure_capture(
+        session.capture,
+        config.frame_width,
+        config.frame_height,
+        config.fps,
+        source=session.source,
+    )
+
+    # --- stream health check -------------------------------------------------
+    # Verify the stream is still alive *before* the NPU model loads (which can
+    # take several seconds).  If it fails here the culprit is configure_capture
+    # breaking the DCMIPP pipeline, not the NPU.
+    _ok_pre, _frame_pre = session.capture.read()
+    if not _ok_pre or _frame_pre is None:
+        raise RuntimeError(
+            "Camera stream failed immediately after configure_capture. "
+            "If running on the STM32MP257 board with a /dev/video* source, "
+            "try passing --frame-width 640 --frame-height 480 to match the "
+            "native DCMIPP resolution and avoid VIDIOC_S_FMT reconfiguration."
+        )
+    print(f"[diag] stream OK after configure — frame shape: {_frame_pre.shape}")
+    # -------------------------------------------------------------------------
+
+    # CMA diagnostic: probe free contiguous memory before NPU model load.
+    _cma_before = _read_cma_free_kb()
+    if _cma_before is not None:
+        print(f"[diag] CmaFree before NPU load: {_cma_before} kB")
 
     yolo = YoloInference(
         weights_path=config.weights,
@@ -331,6 +375,14 @@ def run_app(config: AppConfig) -> int:
         device=config.device,
         use_npu=config.npu,
     )
+
+    # CMA diagnostic: how much contiguous memory did the NPU runtime consume?
+    _cma_after = _read_cma_free_kb()
+    if _cma_before is not None and _cma_after is not None:
+        print(
+            f"[diag] CmaFree after NPU load:  {_cma_after} kB "
+            f"(NPU consumed {_cma_before - _cma_after} kB)"
+        )
     board_detector = BoardDetector()
     board_estimator = BoardStateEstimator(
         minimum_confidence=config.board_min_confidence,
@@ -346,16 +398,15 @@ def run_app(config: AppConfig) -> int:
 
     try:
         while True:
-            for i in range(10):
-                ret, frame = session.read()
-                print(
-                    f"read {i}: ret={ret}, "
-                    f"frame={'None' if frame is None else frame.shape}"
-                )
-
-                if ret and frame is not None:
+            # Allow a few retries for transient buffer-not-ready frames
+            # (e.g. first frame after pipeline warm-up on DCMIPP).
+            ok, frame = False, None
+            for _attempt in range(3):
+                ok, frame = session.read()
+                if ok and frame is not None:
                     break
-            ok, frame = session.read()
+                if _attempt < 2:
+                    print(f"[camera] frame read failed (attempt {_attempt + 1}), retrying...")
             if not ok or frame is None:
                 raise RuntimeError("Failed to read a frame from the camera")
 

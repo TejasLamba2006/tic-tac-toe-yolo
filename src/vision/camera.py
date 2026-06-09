@@ -162,11 +162,51 @@ def configure_capture(
     width: int,
     height: int,
     fps: int | None = None,
+    source: CameraSource | None = None,
 ) -> None:
-    """Apply common camera settings without failing hard if a backend ignores them."""
+    """Apply common camera settings without failing hard if a backend ignores them.
 
-    capture.set(cv2.CAP_PROP_FRAME_WIDTH, float(width))
-    capture.set(cv2.CAP_PROP_FRAME_HEIGHT, float(height))
+    On Linux V4L2 device paths (``/dev/videoX``), the DCMIPP media-controller
+    pipeline cannot be reconfigured via ``VIDIOC_S_FMT`` from OpenCV's V4L2
+    backend.  Attempting it silently stops the stream.  Width/height changes are
+    therefore skipped for those sources; resolution stays at whatever the
+    pipeline was already configured for (typically 640x480 on the STM32MP257
+    board via libcamera/DCMIPP).
+    """
+    # Detect Linux V4L2 device paths that go through DCMIPP.
+    is_v4l2_device = (
+        os.name != "nt"
+        and isinstance(source, str)
+        and source.startswith("/dev/")
+    )
+
+    if not is_v4l2_device:
+        r_w = capture.set(cv2.CAP_PROP_FRAME_WIDTH, float(width))
+        r_h = capture.set(cv2.CAP_PROP_FRAME_HEIGHT, float(height))
+        actual_w = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+        actual_h = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        if not r_w or not r_h:
+            print(
+                f"[camera] Resolution {width}x{height} not accepted "
+                f"(set() returned w={r_w}, h={r_h}); "
+                f"actual: {actual_w}x{actual_h}"
+            )
+        else:
+            print(f"[camera] Resolution set to {actual_w}x{actual_h}")
+    else:
+        actual_w = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+        actual_h = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        print(
+            f"[camera] V4L2 device — skipping VIDIOC_S_FMT to avoid breaking the "
+            f"DCMIPP pipeline; native resolution: {actual_w}x{actual_h}"
+        )
+
     if fps is not None:
-        capture.set(cv2.CAP_PROP_FPS, float(fps))
+        r_fps = capture.set(cv2.CAP_PROP_FPS, float(fps))
+        if not r_fps:
+            actual_fps = capture.get(cv2.CAP_PROP_FPS)
+            print(
+                f"[camera] FPS {fps} not accepted; "
+                f"actual: {actual_fps:.1f}"
+            )
     capture.set(cv2.CAP_PROP_AUTOFOCUS, 0)
