@@ -1,27 +1,92 @@
-# Tic-Tac-Toe YOLOv8 Model
+# Tic-Tac-Toe (detect.py)
 
-A YOLOv8n object detection model trained to classify the state of each cell on a physical Tic-Tac-Toe board.
+This repo’s real-time preview + inference loop is driven by **`detect.py`**.
+
+It:
+
+1. Reads frames from a camera
+2. Detects/warps the tic-tac-toe board to a canonical view
+3. Runs YOLO inference on the warped board
+4. Draws the 3×3 grid + YOLO detection boxes and shows it in an OpenCV window
+
+---
+
+## Architecture (what `detect.py` calls)
+
+`detect.py` is a thin runner around the core pipeline:
+
+- **Model**: `src/ai/yolo_inference.py::YoloInference`
+- **Board geometry / warp**: `src/vision/board_detector.py::BoardDetector`
+- **Board state estimator**: `src/vision/board_state.py::BoardStateEstimator`
+- **Stability tracking**: `src/vision/stability.py::BoardGeometryTracker`
+- **Warp + overlay**: `src/main.py::analyze_frame()` and `src/main.py::_build_board_inset()`
+
+In code form (per frame):
+
+```text
+YoloInference  ->  analyze_frame(frame, detector, board_detector, board_estimator, ...)
+                               |
+                               v
+                      _build_board_inset(analysis, inset_size)
+                               |
+                               v
+                          cv2.imshow(...)
+```
 
 ---
 
-## Table of Contents
+## How to run `detect.py`
 
-- [Tic-Tac-Toe YOLOv8 Model](#tic-tac-toe-yolov8-model)
-  - [Table of Contents](#table-of-contents)
-  - [Model Overview](#model-overview)
-  - [Classes](#classes)
-  - [Architecture](#architecture)
-    - [Inference Backend Selection](#inference-backend-selection)
-    - [Preprocessing Pipeline](#preprocessing-pipeline)
-    - [NPU Memory Safety Flow](#npu-memory-safety-flow)
-  - [Training](#training)
-  - [Quantization](#quantization)
-  - [Export Pipeline](#export-pipeline)
-  - [Inference Backends](#inference-backends)
-  - [Project Structure](#project-structure)
-  - [Configuration Flags](#configuration-flags)
+### 1) PC / PyTorch (no NPU)
+
+Use a `.pt` model and a camera index:
+
+```bash
+python detect.py --weights yolov8n.pt --camera 0
+```
+
+### 2) STM32MP257 NPU (example: `.nb`)
+
+Use a `.nb` model and enable `--npu`:
+
+```bash
+python3 detect.py \
+  --weights tictactoe_yolov8_quant_pc_uf_od_tictactoe_1.nb \
+  --camera auto \
+  --npu
+```
 
 ---
+
+## Command-line options (match `detect.py --help`)
+
+- `--weights` : Model weights path (`.pt / .onnx / .tflite / .nb`)
+  - default: `yolov8n.pt`
+- `--camera` : Camera source (`index`, `/dev/videoX`, or `auto`)
+  - default: `auto`
+- `--width` : Capture width
+  - default: `640`
+- `--height` : Capture height
+  - default: `480`
+- `--fps` : Requested frame rate
+  - default: `30`
+- `--conf` : YOLO confidence threshold
+  - default: `0.50`
+- `--iou` : NMS IoU threshold
+  - default: `0.45`
+- `--image-size` : YOLO input resolution
+  - default: `320`
+- `--inset-size` : Size of the displayed board inset window (pixels)
+  - default: `480`
+- `--npu` : Enable STM32 NPU acceleration
+
+---
+
+## Controls
+
+In the preview window:
+
+- Press **Q** or **ESC** to quit
 
 ## Model Overview
 
@@ -210,28 +275,6 @@ The `.nb` Network Binary format (produced by ST Edge AI packaging) is the optima
 | `.onnx` | ONNX Runtime + `VSINPUExecutionProvider` | STM32MP257 NPU | Handoff format |
 | `.tflite` | TFLite Runtime + `libvx_delegate.so` | STM32MP257 NPU | Quantized INT8 |
 | `.nb` | `stai_mpu_network` | STM32MP257 NPU | Optimal NPU path |
-
----
-
-## Project Structure
-
-```
-.
-├── src/
-│   └── ai/
-│       └── yolo_inference.py    # Backend-agnostic YOLOv8 wrapper
-├── scripts/
-│   ├── train.py                 # YOLOv8n training script
-│   ├── tflite_quant.py          # INT8 quantization
-│   ├── config_quant.yaml        # Quantization config
-│   ├── export_saved.py          # SavedModel export helper
-│   └── augment_dataset.py       # Dataset augmentation
-├── scratch/
-│   └── inspect_tflite.py        # TFLite tensor inspection utility
-├── runs/                        # Training outputs (weights)
-├── quantized_models/            # INT8 quantized .tflite models
-└── data.yaml                    # YOLO dataset config (3 classes)
-```
 
 ---
 

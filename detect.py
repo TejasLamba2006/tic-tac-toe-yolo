@@ -5,7 +5,7 @@ detect.py — Display the warped board inset (grid + YOLO boxes) in an OpenCV wi
 Calls analyze_frame() each tick to get a FrameAnalysis, then passes it to
 _build_board_inset() from src.main and shows the result.
 
-Usage (STM32 device, NPU):
+Usage (STM32 device, NPU)
     python3 detect.py \
         --weights tictactoe_yolov8_quant_pc_uf_od_tictactoe_1.nb \
         --camera auto \
