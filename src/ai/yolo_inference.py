@@ -73,20 +73,20 @@ def _select_yolo_output(output_tensor: np.ndarray) -> np.ndarray:
 def _debug_tensor(prefix: str, tensor: np.ndarray) -> None:
     if not os.environ.get("YOLO_DEBUG"):
         return
-    print(
-        f"[YOLO_DEBUG] {prefix}: shape={tensor.shape} dtype={tensor.dtype} "
-        f"min={float(np.min(tensor)):.6f} max={float(np.max(tensor)):.6f}"
-    )
-    print(f"[YOLO_DEBUG] {prefix} first20={tensor.flatten()[:20]}")
+    # print(
+    #     f"[YOLO_DEBUG] {prefix}: shape={tensor.shape} dtype={tensor.dtype} "
+    #     f"min={float(np.min(tensor)):.6f} max={float(np.max(tensor)):.6f}"
+    # )
+    # print(f"[YOLO_DEBUG] {prefix} first20={tensor.flatten()[:20]}")
     if tensor.ndim == 3:
         for channel_index in range(tensor.shape[1]):
             channel = tensor[0, channel_index, :]
-            print(
-                f"[YOLO_DEBUG] {prefix} ch{channel_index}: "
-                f"min={float(channel.min()):.6f} "
-                f"max={float(channel.max()):.6f} "
-                f"mean={float(channel.mean()):.6f}"
-            )
+            # print(
+            #     f"[YOLO_DEBUG] {prefix} ch{channel_index}: "
+            #     f"min={float(channel.min()):.6f} "
+            #     f"max={float(channel.max()):.6f} "
+            #     f"mean={float(channel.mean()):.6f}"
+            # )
 
 
 class YoloInference:

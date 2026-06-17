@@ -68,18 +68,18 @@ class BoardDetector:
                     [width - 1.0, height - 1.0], [0.0, height - 1.0]],
                 dtype=np.float32,
             )
-            corners, area, method = max(candidates, key=lambda item: item[1])
+            # corners, area, method = max(candidates, key=lambda item: item[1])
 
-            # --- DEBUG: draw the detected quad on a copy of the frame ---
-            debug_frame = frame.copy()
-            pts = order_points(corners).astype(np.int32)
-            cv2.polylines(debug_frame, [pts], isClosed=True, color=(
-                0, 255, 0), thickness=3)
-            for pt in pts:
-                cv2.circle(debug_frame, tuple(pt), 8, (0, 0, 255), -1)
-            cv2.imshow("5 - Detected Board Quad", debug_frame)
-            cv2.waitKey(1)
-            # -----------------------------------------------------------
+            # # --- DEBUG: draw the detected quad on a copy of the frame ---
+            # debug_frame = frame.copy()
+            # pts = order_points(corners).astype(np.int32)
+            # cv2.polylines(debug_frame, [pts], isClosed=True, color=(
+            #     0, 255, 0), thickness=3)
+            # for pt in pts:
+            #     cv2.circle(debug_frame, tuple(pt), 8, (0, 0, 255), -1)
+            # cv2.imshow("5 - Detected Board Quad", debug_frame)
+            # cv2.waitKey(1)
+            # # -----------------------------------------------------------
             return BoardDetectionResult(
                 found=False,
                 corners=fallback_corners,
@@ -103,8 +103,7 @@ class BoardDetector:
         # gray + blur computed once; both passes reuse the same blurred image.
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         blurred = cv2.GaussianBlur(gray, (self.blur_size, self.blur_size), 0)
-        cv2.imshow("1 - Grayscale", gray)        # <-- ADD
-        cv2.imshow("2 - Blurred", blurred)       # <-- ADD
+
         edges = cv2.Canny(blurred, self.canny_low, self.canny_high)
         edges = cv2.morphologyEx(
             edges, cv2.MORPH_CLOSE, self._morph_kernel, iterations=2)
