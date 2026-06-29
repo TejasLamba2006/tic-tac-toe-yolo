@@ -17,7 +17,7 @@ artifacts_dir: artifacts
 # Logging
 # ---------------------------------------------------------------------------
 logging:
-  level: INFO            # DEBUG, INFO, WARNING, ERROR
+  level: INFO # DEBUG, INFO, WARNING, ERROR
   log_dir: artifacts/logs
   log_to_console: true
 
@@ -78,7 +78,7 @@ augmentation:
 training:
   model: yolov8n.pt
   data_yaml: data.yaml
-  epochs: 100
+  epochs: 5
   batch: 4
   imgsz: 320
   workers: 0
@@ -88,7 +88,7 @@ training:
   lrf: 0.01
   momentum: 0.937
   weight_decay: 0.0005
-  device: 0            # 0 = first CUDA GPU, null = auto, 'cpu' = force CPU
+  device: 0
   project: null
   name: null
   exist_ok: true
@@ -119,14 +119,14 @@ export:
 #
 quantization:
   enabled: true
-  quantization_type: per_channel     # per_channel or per_tensor
-  quantization_input_type: uint8     # int8, uint8, or float
-  quantization_output_type: float    # int8, uint8, or float
+  quantization_type: per_channel # per_channel or per_tensor
+  quantization_input_type: uint8 # int8, uint8, or float
+  quantization_output_type: float # int8, uint8, or float
   input_shape: [320, 320, 3]
   rescaling_scale: 255.0
   rescaling_offset: 0.0
   fake: false
-  calib_dataset_path: ""             # Auto-resolved from dataset.path if empty
+  calib_dataset_path: "" # Auto-resolved from dataset.path if empty
   output_dir: quantization
   model_name: tictactoe_yolov8
   use_case: od_tictactoe
@@ -139,15 +139,15 @@ quantization:
 #   STEDGE_USERNAME, STEDGE_PASSWORD, STEDGE_API_KEY
 #
 stedge:
-  enabled: false
-  target: "STM32MP257F-DK"  # Target board for NBG generation
-  optimization: ""          # e.g., "balanced", "performance"
-  board: ""                 # Board name for benchmarking (leave empty to skip)
-  runtime: ""               # Runtime for deployment
+  enabled: true
+  target: "STM32MP257F-DK" # Target board for NBG generation
+  optimization: "" # e.g., "balanced", "performance"
+  board: "" # Board name for benchmarking (leave empty to skip)
+  runtime: "" # Runtime for deployment
   output_dir: compilation
-  username: ""              # Overridden by STEDGE_USERNAME or STM32AI_USERNAME env var
-  password: ""              # Overridden by STEDGE_PASSWORD or STM32AI_PASSWORD env var
-  timeout: 600              # Timeout in seconds for cloud operations
+  username: "tejas22feb@gmail.com" # Overridden by STEDGE_USERNAME or STM32AI_USERNAME env var
+  password: "}S>W;^ucQnk4~KG" # Overridden by STEDGE_PASSWORD or STM32AI_PASSWORD env var
+  timeout: 600 # Timeout in seconds for cloud operations
 
 # ---------------------------------------------------------------------------
 # Deployment (SSH to STM32 board)

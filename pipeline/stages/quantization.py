@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import os
 import random
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -220,9 +221,12 @@ class QuantizationStage(Stage):
     ) -> Path | None:
         """Generate a TensorFlow SavedModel from best.pt.
 
-        This replicates what ``scripts/export_saved.py`` does:
-        call ``model.export(format="tflite", int8=True)`` which produces
-        a SavedModel as an intermediate artifact.
+        Strategy (avoids onnx2tf pickle bug with numpy >=2.x):
+        1. Export ONNX via Ultralytics (works fine).
+        2. Convert ONNX → SavedModel via a subprocess wrapper that
+           patches ``np.load`` before importing onnx2tf.
+        3. The TFLite INT8 quantization is then performed in ``run()``
+           via ``tf.lite.TFLiteConverter``.
         """
         saved_model_dir = output_dir / "saved_model"
         if saved_model_dir.is_dir() and (saved_model_dir / "saved_model.pb").exists():
@@ -230,60 +234,91 @@ class QuantizationStage(Stage):
             ctx.saved_model_dir = saved_model_dir
             return saved_model_dir
 
-        try:
-            from ultralytics import YOLO
-        except ImportError:
-            self.logger.error("Ultralytics is required to generate SavedModel")
-            return None
+        onnx_path = output_dir / "best.onnx"
 
-        self.logger.info("Generating SavedModel from %s", ctx.best_weights)
-        model = YOLO(str(ctx.best_weights))
+        # Step 1: Ensure we have an ONNX file.
+        if not onnx_path.exists():
+            try:
+                from ultralytics import YOLO
+            except ImportError:
+                self.logger.error("Ultralytics is required for ONNX export")
+                return None
 
-        try:
-            exported = model.export(
-                format="tflite",
-                imgsz=ctx.config.training.imgsz,
-                int8=True,
-                data=str(ctx.project_root / ctx.config.training.data_yaml),
-            )
-        except Exception as exc:
-            self.logger.error("SavedModel export failed: %s", exc)
-            return None
+            self.logger.info("Exporting ONNX from %s", ctx.best_weights)
+            model = YOLO(str(ctx.best_weights))
+            try:
+                exported = model.export(
+                    format="onnx",
+                    imgsz=ctx.config.training.imgsz,
+                    opset=12,
+                )
+                exported_path = Path(str(exported))
+                if exported_path != onnx_path:
+                    import shutil
+                    shutil.copy2(str(exported_path), str(onnx_path))
+            except Exception as exc:
+                self.logger.error("ONNX export failed: %s", exc)
+                return None
 
-        exported_path = Path(str(exported))
-
-        # Ultralytics may return the .tflite file or the SavedModel directory.
-        # We need to find the saved_model directory.
-        if exported_path.is_dir():
-            candidate = exported_path
-        else:
-            candidate = exported_path.parent
-
-        # Look for saved_model.pb
-        if (candidate / "saved_model.pb").exists():
+        # Step 2: Convert ONNX → SavedModel using onnx2tf CLI in a subprocess.
+        # This avoids the numpy >=2.x pickle incompatibility that occurs
+        # when onnx2tf is imported in-process.
+        export_dir = output_dir / "onnx2tf_export"
+        if export_dir.exists():
             import shutil
-            if candidate.resolve() != saved_model_dir.resolve():
-                if saved_model_dir.exists():
-                    shutil.rmtree(saved_model_dir)
-                shutil.copytree(candidate, saved_model_dir)
-            ctx.saved_model_dir = saved_model_dir
-            return saved_model_dir
+            shutil.rmtree(export_dir)
 
-        # Search parent directories
-        for parent in [candidate.parent, candidate.parent.parent]:
-            sm = parent / "saved_model"
-            if sm.is_dir() and (sm / "saved_model.pb").exists():
-                import shutil
-                if sm.resolve() != saved_model_dir.resolve():
+        self.logger.info("Converting ONNX → SavedModel via onnx2tf CLI: %s", onnx_path)
+
+        # Write a small wrapper script that patches np.load before onnx2tf.
+        wrapper_script = output_dir / "_onnx2tf_convert.py"
+        wrapper_script.write_text(
+            "import sys, os, io, numpy as np\n"
+            "\n"
+            "# Patch: return dummy calibration data instead of downloading\n"
+            "# from GitHub (the onnx2tf test data URL returns 404).\n"
+            "def _dummy_download():\n"
+            "    return np.random.rand(20, 128, 128, 3).astype(np.float32)\n"
+            "\n"
+            "import onnx2tf.utils.common_functions as cf\n"
+            "cf.download_test_image_data = _dummy_download\n"
+            "import onnx2tf.onnx2tf as o2t\n"
+            "o2t.download_test_image_data = _dummy_download\n"
+            "\n"
+            "import onnx2tf\n"
+            f"onnx2tf.convert(\n"
+            f"    input_onnx_file_path=r\"{onnx_path}\",\n"
+            f"    output_folder_path=r\"{export_dir}\",\n"
+            "    non_verbose=True,\n"
+            ")\n"
+        )
+
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, str(wrapper_script)],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            cwd=str(output_dir),
+        )
+
+        if result.returncode != 0:
+            self.logger.error("onnx2tf CLI failed:\n%s", result.stderr[-2000:] if result.stderr else result.stdout[-2000:])
+            return None
+
+        # Step 3: Locate saved_model.pb in the exported tree.
+        import shutil
+
+        for candidate in [export_dir, export_dir.parent]:
+            if (candidate / "saved_model.pb").exists():
+                if candidate.resolve() != saved_model_dir.resolve():
                     if saved_model_dir.exists():
                         shutil.rmtree(saved_model_dir)
-                    shutil.copytree(sm, saved_model_dir)
+                    shutil.copytree(candidate, saved_model_dir)
                 ctx.saved_model_dir = saved_model_dir
                 return saved_model_dir
 
-        # Try to find any saved_model.pb in the export tree
-        for pb in candidate.rglob("saved_model.pb"):
-            import shutil
+        for pb in export_dir.rglob("saved_model.pb"):
             sm_dir = pb.parent
             if sm_dir.resolve() != saved_model_dir.resolve():
                 if saved_model_dir.exists():
@@ -293,9 +328,10 @@ class QuantizationStage(Stage):
             return saved_model_dir
 
         self.logger.error(
-            "Could not locate SavedModel after export. "
-            "Exported path: %s",
-            exported_path,
+            "Could not locate saved_model.pb after onnx2tf export. "
+            "Exported path: %s  Contents: %s",
+            export_dir,
+            list(export_dir.iterdir()) if export_dir.is_dir() else "N/A",
         )
         return None
 
