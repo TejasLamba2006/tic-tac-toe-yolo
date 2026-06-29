@@ -140,14 +140,14 @@ quantization:
 #
 stedge:
   enabled: false
-  target: ""                # e.g. STM32MP257F-DK
-  optimization: ""
-  board: ""
-  runtime: ""
+  target: "STM32MP257F-DK"  # Target board for NBG generation
+  optimization: ""          # e.g., "balanced", "performance"
+  board: ""                 # Board name for benchmarking (leave empty to skip)
+  runtime: ""               # Runtime for deployment
   output_dir: compilation
-  username: ""              # Overridden by STEDGE_USERNAME env var
-  password: ""              # Overridden by STEDGE_PASSWORD env var
-  api_key: ""               # Overridden by STEDGE_API_KEY env var
+  username: ""              # Overridden by STEDGE_USERNAME or STM32AI_USERNAME env var
+  password: ""              # Overridden by STEDGE_PASSWORD or STM32AI_PASSWORD env var
+  timeout: 600              # Timeout in seconds for cloud operations
 
 # ---------------------------------------------------------------------------
 # Deployment (SSH to STM32 board)

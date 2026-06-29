@@ -42,8 +42,12 @@ def _create_backend(
     version: str | None = None,
 ) -> Any:
     """Create a CloudBackend with proper error handling."""
-    from stm32ai_dc import CloudBackend
-    from stm32ai_dc.types import BackendVersionType
+    try:
+        from common.stm32ai_dc import CloudBackend
+        from common.stm32ai_dc.types import BackendVersionType
+    except ImportError:
+        from stm32ai_dc import CloudBackend
+        from stm32ai_dc.types import BackendVersionType
 
     if platform is None:
         platform = BackendVersionType.STM32MPU
@@ -118,7 +122,10 @@ class STEdgeAIClient:
             description="Authentication",
         )
 
-        from stm32ai_dc import Stm32Ai
+        try:
+            from common.stm32ai_dc import Stm32Ai
+        except ImportError:
+            from stm32ai_dc import Stm32Ai
         self._ai = Stm32Ai(self._backend)
         logger.info("Connected to ST Edge AI Developer Cloud")
 
@@ -164,7 +171,10 @@ class STEdgeAIClient:
         **kwargs:
             Additional CliParameters fields.
         """
-        from stm32ai_dc import CliParameters, CliParameterType
+        try:
+            from common.stm32ai_dc import CliParameters, CliParameterType
+        except ImportError:
+            from stm32ai_dc import CliParameters, CliParameterType
 
         type_map = {
             "tflite": CliParameterType.TFLITE,
@@ -280,7 +290,10 @@ class STEdgeAIClient:
         -------
         BenchmarkResult or MpuBenchmarkResult
         """
-        from stm32ai_dc import MpuParameters, MpuEngine
+        try:
+            from common.stm32ai_dc import MpuParameters, MpuEngine
+        except ImportError:
+            from stm32ai_dc import MpuParameters, MpuEngine
 
         engine_map = {
             "cpu": MpuEngine.CPU,
