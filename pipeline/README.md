@@ -39,22 +39,28 @@ The final stage uses SSH/SCP to push the model to the board's filesystem. If you
 ## Quick Start
 
 ```bash
-# 1. Install dependencies
-pip install -e ".[stedge]"
+# 1. Create virtual environment (Python 3.12 required for TensorFlow compatibility)
+uv python install 3.12
+uv venv --python 3.12
 
-# 2. Set credentials (never hardcode these)
+# 2. Install all dependencies (training + quantization + stedge)
+uv pip install -e ".[all,stedge]"
+
+# 3. Set credentials (never hardcode these)
 export STEDGE_USERNAME="you@example.com"
 export STEDGE_PASSWORD="your_password"
 
-# 3. Run the full pipeline
+# 4. Run the full pipeline
 python run_pipeline.py --config pipeline/config/config.yaml
 
-# 4. Or just the ST Edge AI compilation stage
+# 5. Or just the ST Edge AI compilation stage
 python run_pipeline.py --stage stedge_compile
 
-# 5. Or use the standalone example
+# 6. Or use the standalone example
 python examples/optimize_for_mpu.py --model build/best.tflite
 ```
+
+> **Note:** The `stm32ai_dc` SDK is vendored locally because the upstream repo has Windows-incompatible path lengths and lacks a `pyproject.toml`. The `[stedge]` extra installs it from `common/` automatically.
 
 ## When Things Go Sideways
 
@@ -62,7 +68,7 @@ python examples/optimize_for_mpu.py --model build/best.tflite
 
 **"stm32ai_dc not installed"** — Install it:
 ```bash
-pip install stm32ai_dc@git+https://github.com/STMicroelectronics/stm32ai-modelzoo-services.git#subdirectory=common/stm32ai_dc
+uv pip install -e ".[stedge]"
 ```
 
 **NBG generation times out** — The default timeout is 600 seconds. Complex models may need more. Set `--timeout 900` or higher. Also check if the cloud service is under heavy load.

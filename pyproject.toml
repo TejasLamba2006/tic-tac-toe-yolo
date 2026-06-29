@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "stm32-yolo-pipeline"
@@ -24,10 +24,10 @@ quantization = [
     "tensorflow>=2.13",
 ]
 stedge = [
-    "stm32ai_dc @ git+https://github.com/STMicroelectronics/stm32ai-modelzoo-services.git#subdirectory=common/stm32ai_dc",
+    "stm32ai_dc @ file:///C:/Users/Tejas/AppData/Local/Temp/opencode/stm32ai-modelzoo-services/common",
 ]
 all = [
-    "stm32-yolo-pipeline[training,quantization]",
+    "stm32-yolo-pipeline[training,quantization,stedge]",
 ]
 
 [project.scripts]

@@ -244,15 +244,16 @@ class STEdgeAIClient:
         """
         target_dir = Path(target_dir)
         target_dir.mkdir(parents=True, exist_ok=True)
+        target_file = target_dir / model_name
 
-        logger.info("Downloading: %s → %s", model_name, target_dir)
+        logger.info("Downloading: %s → %s", model_name, target_file)
         _retry_with_backoff(
-            lambda: self._ai.download_model(model_name, str(target_dir)),
+            lambda: self._ai.download_model(model_name, str(target_file)),
             max_retries=3,
             base_delay=2.0,
             description=f"Download {model_name}",
         )
-        downloaded = target_dir / model_name
+        downloaded = target_file
         if downloaded.exists():
             logger.info("Download complete: %s", downloaded)
             return downloaded
