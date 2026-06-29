@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "stm32-yolo-pipeline"
+version = "0.1.0"
+description = "Automated ML pipeline for YOLO training, export, quantization, and STM32 deployment"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+
+dependencies = [
+    "pyyaml>=6.0",
+    "opencv-python>=4.8",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+training = [
+    "ultralytics>=8.0",
+    "torch>=2.0",
+]
+quantization = [
+    "tensorflow>=2.13",
+]
+stedge = [
+    "stm32ai_dc @ git+https://github.com/STMicroelectronics/stm32ai-modelzoo-services.git#subdirectory=common/stm32ai_dc",
+]
+all = [
+    "stm32-yolo-pipeline[training,quantization]",
+]
+
+[project.scripts]
+pipeline = "pipeline.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["pipeline*"]
+
+[tool.pytest.ini_options]
+testpaths = ["pipeline", "src/tests"]
+pythonpath = ["."]
