@@ -12,18 +12,7 @@ Under the hood, we use the official `stm32ai_dc` Python SDK — ST's own REST AP
 
 ## The Architecture
 
-```
-┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│  YOLO Training   │────▶│  ONNX Export     │────▶│  TFLite INT8    │
-│  (Ultralytics)   │     │  (opset 12)      │     │  Quantization   │
-└─────────────────┘     └──────────────────┘     └────────┬────────┘
-                                                          │
-                                                          ▼
-┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│  Deploy to Board │◀────│  NBG Generation  │◀────│  ST Edge AI DC  │
-│  (SSH/SCP)       │     │  (Cloud Optimize)│     │  (Upload + Auth)│
-└─────────────────┘     └──────────────────┘     └─────────────────┘
-```
+![how_it_works](how-it-works.png)
 
 ## How It Works (The Journey)
 
