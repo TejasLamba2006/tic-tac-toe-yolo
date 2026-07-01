@@ -1,0 +1,18 @@
+Metadata-Version: 2.4
+Name: stm32-yolo-pipeline
+Version: 0.1.0
+Summary: Automated ML pipeline for YOLO training, export, quantization, and STM32 deployment
+License: MIT
+Requires-Python: >=3.11
+Requires-Dist: pyyaml>=6.0
+Requires-Dist: opencv-python>=4.8
+Requires-Dist: numpy>=1.24
+Provides-Extra: training
+Requires-Dist: ultralytics>=8.0; extra == "training"
+Requires-Dist: torch>=2.0; extra == "training"
+Provides-Extra: quantization
+Requires-Dist: tensorflow>=2.13; extra == "quantization"
+Provides-Extra: stedge
+Requires-Dist: stm32ai_dc @ file:///C:/Users/Tejas/AppData/Local/Temp/opencode/stm32ai-modelzoo-services/common ; extra == "stedge"
+Provides-Extra: all
+Requires-Dist: stm32-yolo-pipeline[quantization,stedge,training]; extra == "all"

@@ -85,8 +85,12 @@ class PipelineRunner:
             ctx.record_result(stage.name, result)
 
             if not result.ok:
+                _RED = "\033[31m"
+                _R = "\033[0m"
+                _BOLD = "\033[1m"
                 logger.error(
-                    "Stage '%s' failed: %s — stopping pipeline.",
+                    f"{_RED}{_BOLD}Stage '%s' failed{_R}{_RED}: %s{_R} "
+                    f"— stopping pipeline.",
                     stage.name,
                     result.message,
                 )
@@ -200,22 +204,37 @@ class PipelineRunner:
         return StageResult(status=StageStatus.SUCCESS, message=msg)
 
     def _print_summary(self, results: dict[str, StageResult]) -> None:
+        # ANSI helpers — same palette as _ColorFormatter but applied via
+        # the plain logger so these messages bypass the formatter.
+        _R = "\033[0m"
+        _CYAN = "\033[36m"
+        _BOLD = "\033[1m"
+        _RED = "\033[31m"
+        _GREEN = "\033[32m"
+        _YELLOW = "\033[33m"
+        _DIM = "\033[2m"
+
+        _ICONS = {
+            StageStatus.SUCCESS: (_GREEN, "OK"),
+            StageStatus.SKIPPED: (_YELLOW, "SKIP"),
+            StageStatus.FAILED:  (_RED, "FAIL"),
+            StageStatus.PENDING: (_DIM, "----"),
+            StageStatus.RUNNING: (_DIM, "...."),
+        }
+
         logger.info("")
-        logger.info("=" * 60)
-        logger.info("PIPELINE SUMMARY")
-        logger.info("=" * 60)
+        logger.info(f"{_CYAN}{_BOLD}{'=' * 60}{_R}")
+        logger.info(f"{_CYAN}{_BOLD}  PIPELINE SUMMARY{_R}")
+        logger.info(f"{_CYAN}{_BOLD}{'=' * 60}{_R}")
         for name, result in results.items():
-            icon = {
-                StageStatus.SUCCESS: "OK",
-                StageStatus.SKIPPED: "SKIP",
-                StageStatus.FAILED: "FAIL",
-                StageStatus.PENDING: "----",
-                StageStatus.RUNNING: "....",
-            }.get(result.status, "????")
+            color, icon = _ICONS.get(result.status, (_DIM, "????"))
             duration = (
                 f" ({result.duration_seconds:.1f}s)"
                 if result.duration_seconds > 0
                 else ""
             )
-            logger.info("  [%s] %-20s %s%s", icon, name, result.message, duration)
-        logger.info("=" * 60)
+            logger.info(
+                f"  {color}[{icon}]{_R} {_DIM}{name:<20s}{_R} "
+                f"{result.message}{_DIM}{duration}{_R}"
+            )
+        logger.info(f"{_CYAN}{_BOLD}{'=' * 60}{_R}")

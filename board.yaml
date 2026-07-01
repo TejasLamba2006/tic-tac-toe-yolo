@@ -26,7 +26,7 @@ logging:
 # ---------------------------------------------------------------------------
 dataset:
   # Path to the dataset root (relative to project root).
-  path: dataset4
+  path: dataset_boards
 
   # Subdirectory layout within the dataset path.
   train_images: train/images
@@ -78,7 +78,7 @@ augmentation:
 training:
   model: yolov8n.pt
   data_yaml: data.yaml
-  epochs: 5
+  epochs: 100
   batch: 4
   imgsz: 320
   workers: 0
@@ -128,8 +128,8 @@ quantization:
   fake: false
   calib_dataset_path: "" # Auto-resolved from dataset.path if empty
   output_dir: quantization
-  model_name: tictactoe_yolov8
-  use_case: od_tictactoe
+  model_name: board_detector_yolov8
+  use_case: od_board_detector
 
 # ---------------------------------------------------------------------------
 # ST Edge AI Developer Cloud Compilation

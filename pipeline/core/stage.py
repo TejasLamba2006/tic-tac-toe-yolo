@@ -72,20 +72,31 @@ class Stage(ABC):
         # Input validation
         errors = self.validate_inputs(ctx)
         if errors:
+            _RED = "\033[31m"
+            _R = "\033[0m"
             msg = f"Input validation failed: {'; '.join(errors)}"
-            self.logger.error(msg)
+            self.logger.error(f"{_RED}%s{_R}", msg)
             return StageResult(status=StageStatus.FAILED, message=msg)
 
         # Skip check
         skip_reason = self.should_skip(ctx)
         if skip_reason is not None:
-            self.logger.info("Skipping: %s", skip_reason)
+            _YELLOW = "\033[33m"
+            _R = "\033[0m"
+            self.logger.info(f"{_YELLOW}Skipping{_R}: %s", skip_reason)
             return StageResult(
                 status=StageStatus.SKIPPED, message=skip_reason
             )
 
         # Run
-        self.logger.info("Starting stage: %s", self.name)
+        _BOLD = "\033[1m"
+        _R = "\033[0m"
+        _CYAN = "\033[36m"
+        _GREEN = "\033[32m"
+        _YELLOW = "\033[33m"
+        self.logger.info(
+            f"{_CYAN}{_BOLD}Starting{_R} {_BOLD}%s{_R}", self.name
+        )
         start = time.perf_counter()
         try:
             result = self.run(ctx)
@@ -98,7 +109,19 @@ class Stage(ABC):
                 duration_seconds=duration,
             )
         result.duration_seconds = time.perf_counter() - start
+        _R = "\033[0m"
+        _GREEN = "\033[32m"
+        _YELLOW = "\033[33m"
+        _RED = "\033[31m"
+        _DIM = "\033[2m"
+        color = {
+            "success": _GREEN,
+            "skipped": _YELLOW,
+            "failed":  _RED,
+        }.get(result.status.value, _DIM)
         self.logger.info(
-            "Completed: %s (%.1fs)", result.status.value, result.duration_seconds
+            f"{color}%s{_R}{_DIM} (%.1fs){_R}",
+            result.status.value,
+            result.duration_seconds,
         )
         return result

@@ -21,6 +21,35 @@ LOG_FORMAT = (
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
+# -- ANSI helpers (no external deps) -----------------------------------------
+
+_RESET = "\033[0m"
+_COLORS = {
+    "DEBUG":    "\033[37m",       # light gray
+    "INFO":     "\033[0m",       # default (no color)
+    "WARNING":  "\033[33m",      # yellow
+    "ERROR":    "\033[31m",      # red
+    "CRITICAL": "\033[1;31m",    # bold red
+}
+
+
+class _ColorFormatter(logging.Formatter):
+    """Formatter that wraps the level name in ANSI color codes.
+
+    Used only on the console handler so files stay plain text.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        # Temporarily inject a colored levelname into the record.
+        original = record.levelname
+        color = _COLORS.get(original, "")
+        record.levelname = f"{color}{original}{_RESET}"
+        try:
+            return super().format(record)
+        finally:
+            record.levelname = original
+
+
 def setup_logging(
     level: str = "INFO",
     log_dir: Path | None = None,
@@ -49,11 +78,16 @@ def setup_logging(
     root_logger.setLevel(getattr(logging, level.upper(), logging.INFO))
     root_logger.propagate = False
 
-    formatter = logging.Formatter(LOG_FORMAT, datefmt=DATE_FORMAT)
+    plain_formatter = logging.Formatter(LOG_FORMAT, datefmt=DATE_FORMAT)
+    color_formatter = _ColorFormatter(LOG_FORMAT, datefmt=DATE_FORMAT)
 
     if log_to_console:
         console = logging.StreamHandler(sys.stderr)
-        console.setFormatter(formatter)
+        # Detect if stderr is a real TTY; skip colors if piped.
+        if hasattr(console.stream, "isatty") and console.stream.isatty():
+            console.setFormatter(color_formatter)
+        else:
+            console.setFormatter(plain_formatter)
         root_logger.addHandler(console)
 
     log_file_path: Path | None = None
@@ -62,7 +96,7 @@ def setup_logging(
         timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
         log_file_path = log_dir / f"pipeline_{timestamp}.log"
         file_handler = logging.FileHandler(log_file_path, encoding="utf-8")
-        file_handler.setFormatter(formatter)
+        file_handler.setFormatter(plain_formatter)
         root_logger.addHandler(file_handler)
 
     _CONFIGURED = True

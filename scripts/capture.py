@@ -3,13 +3,13 @@ import os
 from datetime import datetime
 
 # Create output directory
-SAVE_DIR = "dataset"
+SAVE_DIR = "dataset_boards/images"
 os.makedirs(SAVE_DIR, exist_ok=True)
 
-camera = cv2.VideoCapture(1)
+camera = cv2.VideoCapture(0)
 # camera.release()
-camera.set(cv2.CAP_PROP_AUTOFOCUS, 0)
-# camera.set(cv2.CAP_PROP_FOCUS, 0)
+camera.set(cv2.CAP_PROP_AUTOFOCUS, 1)
+# camera.set(cv2.CAP_PROP_FOCUS, 1)
 if camera is None:
     print("[-] No camera found")
     exit()
