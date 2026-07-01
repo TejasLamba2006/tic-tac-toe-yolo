@@ -1,5 +1,0 @@
-- [x] Gather info: confirm detect.py imports and which parts of README are unused by detect.py
-- [x] Draft a minimal README focused on detect.py architecture + run options
-- [x] Update README.md to match detect.py CLI flags (“humanized skill” style)
-- [x] Ensure README only references relevant architecture/backends actually used by detect.py
-- [x] Verify README is consistent with detect.py arguments and default values
