@@ -8,3 +8,5 @@ dataset4
 *.pyc
 artifacts
 dataset_boards
+dataset_accessories
+artifacts_accessories

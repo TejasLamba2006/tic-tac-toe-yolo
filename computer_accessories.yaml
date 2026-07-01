@@ -1,0 +1,165 @@
+# =============================================================================
+# Pipeline Configuration — Computer Accessories (LabEquipVis)
+# =============================================================================
+#
+# 10 classes: Ac, Chair, Cpu, Digital board, Fire Extinguisher,
+#             Keyboard, Light, Monitor, Mouse, Projector
+#
+# Dataset: LabEquipVis (2584 images, YOLO format, 640x640)
+# Source:  Mendeley / Kaggle — pre-split into train/valid/test
+#
+# =============================================================================
+
+artifacts_dir: artifacts_accessories
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+logging:
+  level: INFO
+  log_dir: artifacts_accessories/logs
+  log_to_console: true
+
+# ---------------------------------------------------------------------------
+# Dataset
+# ---------------------------------------------------------------------------
+dataset:
+  path: dataset_accessories
+
+  train_images: train/images
+  train_labels: train/labels
+  val_images: valid/images
+  val_labels: valid/labels
+  test_images: test/images
+  test_labels: test/labels
+
+  image_extensions: [".jpg", ".jpeg", ".png", ".bmp"]
+
+  # Split already provided by the dataset authors
+  split_enabled: false
+  split_ratios:
+    train: 0.8
+    val: 0.1
+    test: 0.1
+  split_seed: 42
+
+# ---------------------------------------------------------------------------
+# Augmentation — DISABLED (dataset already has 3x augmented copies)
+# ---------------------------------------------------------------------------
+augmentation:
+  enabled: false
+  output_dir: augmented
+
+  brightness_factors: [0.6, 1.4]
+  contrast_factors: [0.7, 1.4]
+  gaussian_blur: true
+  gaussian_blur_kernel: 5
+  noise_stddev: 10.0
+
+  rotate_enabled: false
+  rotate_max_degrees: 5.0
+  perspective_enabled: false
+  perspective_max_shift: 15
+
+  copy_labels: true
+
+# ---------------------------------------------------------------------------
+# Training
+# ---------------------------------------------------------------------------
+training:
+  model: yolov8n.pt
+  data_yaml: dataset_accessories/data.yaml
+  epochs: 50
+  batch: 4
+  imgsz: 320
+  workers: 0
+  patience: 15
+  optimizer: auto
+  lr0: 0.01
+  lrf: 0.01
+  momentum: 0.937
+  weight_decay: 0.0005
+  device: 0
+  project: null
+  name: null
+  exist_ok: true
+  resume: false
+  seed: 0
+  deterministic: true
+  amp: true
+  cache: false
+  plots: true
+  save: true
+
+# ---------------------------------------------------------------------------
+# Export (ONNX)
+# ---------------------------------------------------------------------------
+export:
+  opset: 12
+  imgsz: 320
+  simplify: false
+  output_dir: export
+
+# ---------------------------------------------------------------------------
+# Quantization (TFLite INT8)
+# ---------------------------------------------------------------------------
+quantization:
+  enabled: true
+  quantization_type: per_channel
+  quantization_input_type: uint8
+  quantization_output_type: float
+  input_shape: [320, 320, 3]
+  rescaling_scale: 255.0
+  rescaling_offset: 0.0
+  fake: false
+  calib_dataset_path: ""
+  output_dir: quantization
+  model_name: computer_accessories_yolov8
+  use_case: od_computer_accessories
+
+# ---------------------------------------------------------------------------
+# ST Edge AI Developer Cloud Compilation
+# ---------------------------------------------------------------------------
+stedge:
+  enabled: false
+  target: "STM32MP257F-DK"
+  optimization: ""
+  board: ""
+  runtime: ""
+  output_dir: compilation
+  username: ""
+  password: ""
+  timeout: 600
+
+# ---------------------------------------------------------------------------
+# Deployment (SSH to STM32 board)
+# ---------------------------------------------------------------------------
+deployment:
+  enabled: false
+  host: ""
+  port: 22
+  username: ""
+  password: ""
+  ssh_key: ""
+  remote_model_directory: ""
+  remote_working_directory: ""
+  inference_command: ""
+  verification_command: ""
+  benchmark_command: ""
+
+# ---------------------------------------------------------------------------
+# Benchmark
+# ---------------------------------------------------------------------------
+benchmark:
+  enabled: false
+  iterations: 100
+  warmup_iterations: 10
+  output_dir: benchmark
+
+# ---------------------------------------------------------------------------
+# Reports
+# ---------------------------------------------------------------------------
+report:
+  enabled: true
+  formats: [json, html, markdown]
+  output_dir: reports
