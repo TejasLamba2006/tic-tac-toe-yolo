@@ -100,6 +100,12 @@ class Stage(ABC):
         start = time.perf_counter()
         try:
             result = self.run(ctx)
+        except KeyboardInterrupt:
+            duration = time.perf_counter() - start
+            self.logger.warning(
+                "Stage '%s' interrupted by user (KeyboardInterrupt)", self.name
+            )
+            raise
         except Exception as exc:
             duration = time.perf_counter() - start
             self.logger.exception("Stage failed with exception")

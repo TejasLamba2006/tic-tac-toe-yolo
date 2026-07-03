@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>STM32 YOLO Pipeline &middot; Dashboard</title>
+  <link rel="stylesheet" href="/static/css/styles.css" />
+</head>
+
+<body>
+  <div class="shell">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">&lt;/&gt;</div>
+        <div class="brand-text">
+          <div class="brand-title">YOLOv8 &rarr; STM32</div>
+          <div class="brand-subtitle">ML Pipeline Console</div>
+        </div>
+      </div>
+
+      <nav class="nav">
+        <button class="nav-item active" data-tab="dataset">
+          <span class="nav-index">01</span> Dataset
+        </button>
+        <button class="nav-item" data-tab="config">
+          <span class="nav-index">02</span> Configuration
+        </button>
+        <button class="nav-item" data-tab="preflight">
+          <span class="nav-index">03</span> Preflight
+        </button>
+        <button class="nav-item" data-tab="run">
+          <span class="nav-index">04</span> Run &amp; Logs
+        </button>
+        <button class="nav-item" data-tab="results">
+          <span class="nav-index">05</span> Results
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="status-row">
+          <span class="status-label">Pipeline status</span>
+          <span id="global-status" class="badge badge-idle">Idle</span>
+        </div>
+        <div id="config-path-row" hidden>
+          <span id="active-config-path" class="mono-small"></span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main -->
+    <main class="main">
+      <!-- Dataset Tab -->
+      <section class="panel" id="tab-dataset">
+        <header class="panel-header">
+          <h1>Dataset</h1>
+          <p>Point the pipeline at a dataset already on disk, or upload a ZIP containing images and YOLO-format
+            <code>.txt</code> labels.</p>
+        </header>
+
+        <div class="grid-2">
+          <div class="card">
+            <h2>Use an existing folder</h2>
+            <p class="hint">Path is resolved relative to the project root if not absolute.</p>
+            <div class="field-row">
+              <input type="text" id="dataset-path-input" placeholder="e.g. dataset_accessories or C:\data\my_dataset" />
+              <button class="btn btn-secondary" id="scan-path-btn">Scan</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <h2>Upload a ZIP archive</h2>
+            <p class="hint">Extracted into <code>dataset_uploads/</code>. Roboflow-style exports (single wrapper folder
+              + <code>data.yaml</code>) are auto-detected.</p>
+            <div class="dropzone" id="dropzone">
+              <input type="file" id="zip-input" accept=".zip" hidden />
+              <div class="dropzone-label">Drop a .zip here or <span class="link">browse</span></div>
+              <div class="dropzone-file" id="dropzone-filename"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" id="dataset-summary-card" hidden>
+          <h2>Dataset summary</h2>
+          <div id="dataset-summary-body"></div>
+        </div>
+      </section>
+
+      <!-- Config Tab -->
+      <section class="panel hidden" id="tab-config">
+        <header class="panel-header">
+          <h1>Configuration</h1>
+          <p>These fields generate <code>generated_configs/&lt;name&gt;.yaml</code>, consumed by
+            <code>run_pipeline.py --config</code>.</p>
+        </header>
+
+        <div class="card" id="config-no-dataset-warning">
+          <p class="warning-text">Scan or upload a dataset in the <strong>Dataset</strong> tab first.</p>
+        </div>
+
+        <form id="config-form" class="card hidden" autocomplete="off">
+          <div class="form-grid">
+            <label class="field">
+              <span>Dataset Name</span>
+              <input type="text" name="dataset_name" required placeholder="e.g. computer_accessories" />
+            </label>
+
+            <label class="field">
+              <span>Epochs</span>
+              <input type="number" name="epochs" min="1" value="100" required />
+            </label>
+
+            <label class="field">
+              <span>Batch Size</span>
+              <input type="number" name="batch_size" min="1" value="4" required />
+            </label>
+
+            <label class="field">
+              <span>Image Size</span>
+              <select name="imgsz">
+                <option value="320" selected>320</option>
+                <option value="416">416</option>
+                <option value="640">640</option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span>Training Device</span>
+              <select name="device">
+                <option value="cpu" selected>CPU</option>
+                <option value="0">GPU (CUDA device 0)</option>
+              </select>
+              <span class="hint-inline">Pick GPU only if this machine has a CUDA-capable card &amp; torch+cuda
+                installed.</span>
+            </label>
+          </div>
+
+          <div class="field" id="class-names-field" hidden>
+            <span>Class Names <span class="hint-inline">(comma-separated &mdash; no data.yaml was detected in this
+                dataset)</span></span>
+            <input type="text" name="class_names" placeholder="e.g. cat, dog, person" />
+          </div>
+
+          <div class="toggle-row">
+            <label class="switch">
+              <input type="checkbox" name="enable_int8" />
+              <span class="slider"></span>
+            </label>
+            <div>
+              <div class="toggle-title">Enable INT8 Quantization</div>
+              <div class="hint">Post-training quantization for TFLite export (per-channel, uint8 input).</div>
+            </div>
+          </div>
+
+          <div class="toggle-row">
+            <label class="switch">
+              <input type="checkbox" name="deploy_stedge" id="deploy-stedge-toggle" />
+              <span class="slider"></span>
+            </label>
+            <div>
+              <div class="toggle-title">Deploy to ST Edge AI Developer Cloud</div>
+              <div class="hint">Compiles the quantized model in the cloud after training.</div>
+            </div>
+          </div>
+
+          <div class="subcard hidden" id="stedge-fields">
+            <div class="form-grid">
+              <label class="field">
+                <span>Target Board</span>
+                <input type="text" name="stedge_target" value="STM32MP257F-DK" />
+              </label>
+              <label class="field">
+                <span>ST Edge AI Username</span>
+                <input type="text" name="stedge_username" autocomplete="off" />
+              </label>
+              <label class="field">
+                <span>ST Edge AI Password</span>
+                <input type="password" name="stedge_password" autocomplete="new-password" />
+              </label>
+            </div>
+            <p class="hint">Credentials are written only to the local generated YAML file, never transmitted anywhere
+              except this machine.</p>
+          </div>
+
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Generate Config</button>
+            <span id="config-generate-status" class="hint-inline"></span>
+          </div>
+        </form>
+
+        <div class="card hidden" id="config-preview-card">
+          <h2>Generated <code>custom.yaml</code></h2>
+          <pre class="yaml-preview" id="config-preview"></pre>
+        </div>
+      </section>
+
+      <!-- Preflight Tab -->
+      <section class="panel hidden" id="tab-preflight">
+        <header class="panel-header">
+          <h1>Preflight</h1>
+          <p>Catches missing libraries, missing files, and bad config values before they burn training time.</p>
+        </header>
+
+        <div class="card">
+          <div class="results-toolbar">
+            <input type="text" id="preflight-config-input" placeholder="generated_configs/your_dataset.yaml" />
+            <button class="btn btn-primary" id="run-preflight-btn">Run Checks</button>
+          </div>
+        </div>
+
+        <div class="card hidden" id="preflight-results-card">
+          <div class="toggle-row" style="border-top:none;padding-top:0;">
+            <span id="preflight-overall-badge" class="badge badge-idle">Not run</span>
+            <div>
+              <div class="toggle-title" id="preflight-overall-text">Run checks to see results</div>
+            </div>
+          </div>
+
+          <div class="section-title">Environment</div>
+          <div id="preflight-python" class="hint"></div>
+
+          <div class="section-title">Python Packages</div>
+          <div id="preflight-packages"></div>
+
+          <div class="section-title">Disk Space</div>
+          <div id="preflight-disk"></div>
+        </div>
+      </section>
+
+      <!-- Run Tab -->
+      <section class="panel hidden" id="tab-run">
+        <header class="panel-header">
+          <h1>Run &amp; Logs</h1>
+          <p>Runs <code>python run_pipeline.py --config &lt;generated config&gt;</code> as a background process.</p>
+        </header>
+
+        <div class="card run-controls">
+          <div class="run-controls-left">
+            <button class="btn btn-primary" id="start-run-btn" disabled>&#9654; Start Pipeline</button>
+            <button class="btn btn-danger" id="stop-run-btn" disabled>&#9632; Stop</button>
+            <button class="btn btn-secondary" id="clear-log-btn">Clear Log</button>
+          </div>
+          <div class="run-controls-right">
+            <span class="status-label">Status</span>
+            <span id="run-status-badge" class="badge badge-idle">Idle</span>
+          </div>
+        </div>
+
+        <div class="card terminal-card">
+          <div class="terminal-titlebar">
+            <div class="dots"><span></span><span></span><span></span></div>
+            <div class="terminal-title">Terminal Logs</div>
+          </div>
+          <pre class="terminal" id="terminal"></pre>
+        </div>
+      </section>
+
+      <!-- Results Tab -->
+      <section class="panel hidden" id="tab-results">
+        <header class="panel-header">
+          <h1>Results</h1>
+          <p>Charts read straight from the pipeline's own <code>report/pipeline_report.json</code> and training
+            <code>results.csv</code> &mdash; nothing re-computed.</p>
+        </header>
+
+        <div class="card">
+          <div class="results-toolbar">
+            <input type="text" id="results-config-input" placeholder="generated_configs/your_dataset.yaml" />
+            <button class="btn btn-primary" id="load-results-btn">Load Results</button>
+          </div>
+        </div>
+
+        <div id="results-empty" class="card">
+          <p class="empty-state">No results loaded yet. Enter a config path above (or generate one in the Configuration
+            tab) and click Load Results.</p>
+        </div>
+
+        <div id="results-content" class="hidden">
+          <div class="card">
+            <h2>Final Metrics</h2>
+            <div class="scorecards" id="results-scorecards"></div>
+          </div>
+
+          <div class="card">
+            <h2>Stage Timeline</h2>
+            <div class="chart-wrap short"><canvas id="chart-stages"></canvas></div>
+          </div>
+
+          <div class="card">
+            <h2>Training Curves</h2>
+            <div class="chart-wrap"><canvas id="chart-loss"></canvas></div>
+            <div class="chart-wrap"><canvas id="chart-map"></canvas></div>
+          </div>
+
+          <div class="card">
+            <h2>Model Size</h2>
+            <div class="chart-wrap short"><canvas id="chart-size"></canvas></div>
+          </div>
+
+          <div class="card">
+            <h2>Benchmark Latency</h2>
+            <div id="benchmark-empty" class="empty-state">No benchmark data (benchmark stage disabled or not yet run).
+            </div>
+            <div class="chart-wrap short hidden" id="benchmark-chart-wrap"><canvas id="chart-benchmark"></canvas></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/js/vendor/chart.umd.min.js"></script>
+  <script src="/static/js/app.js"></script>
+</body>
+
+</html>

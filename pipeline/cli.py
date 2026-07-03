@@ -153,11 +153,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 1
 
-    results = runner.run_all(
-        ctx,
-        from_stage=args.from_stage,
-        single_stage=args.stage,
-    )
+    try:
+        results = runner.run_all(
+            ctx,
+            from_stage=args.from_stage,
+            single_stage=args.stage,
+        )
+    except KeyboardInterrupt:
+        import logging as _logging
+        _logging.getLogger(__name__).warning("Pipeline interrupted by user")
+        return 130
 
     # Return non-zero if any stage failed.
     failed = any(

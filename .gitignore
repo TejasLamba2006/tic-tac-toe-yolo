@@ -1,12 +1,65 @@
-.venv
-.vscode
-dataset
-hidden.md
-dataset2
-dataset3
-dataset4
+# ── Python ────────────────────────────────────────────────────────────────────
+.venv/
+__pycache__/
 *.pyc
-artifacts
-dataset_boards
-dataset_accessories
-artifacts_accessories
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+
+# ── IDE / OS ──────────────────────────────────────────────────────────────────
+.vscode/
+.claude/
+.remember/
+.idea/
+*.DS_Store
+Thumbs.db
+
+# ── Datasets (large; never commit raw image data) ────────────────────────────
+dataset/
+dataset2/
+dataset3/
+dataset4/
+dataset_boards/
+dataset_accessories/
+dataset_uploads/
+
+# ── Artifacts & training outputs ──────────────────────────────────────────────
+artifacts/
+artifacts_*/
+runs/
+quantized_models/
+build/
+
+# ── Secrets & local config ─────────────────────────────────────────────────────
+generated_configs/
+github_token
+hidden.md
+*.env
+.env.*
+
+# ── Large binary / data files ─────────────────────────────────────────────────
+*.npy
+*.npy.zip
+*.pt
+*.nb
+*.tflite
+*.onnx
+*.pb
+calibration_image_sample_data_*
+
+# ── Scratch / temp ────────────────────────────────────────────────────────────
+scratch/
+*.tmp
+*.log
+
+# ── Web dashboard runtime caches ──────────────────────────────────────────────
+webui/__pycache__/
+webui/static/__pycache__/
+
+# ── Miscellaneous one-offs ────────────────────────────────────────────────────
+board.yaml
+computer_accessories.yaml
+data.yaml
+test.py
+source-files/

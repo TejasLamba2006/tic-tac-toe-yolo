@@ -19,12 +19,27 @@ dependencies = [
 training = [
     "ultralytics>=8.0",
     "torch>=2.0",
+    "torchvision>=0.15",
 ]
 quantization = [
     "tensorflow>=2.13",
+    "onnx>=1.12.0",
+    "onnxruntime>=1.12.0",
+    "onnxslim>=0.1.82",
+    "onnx2tf",
+    "tf_keras",
+    "onnx_graphsurgeon",
+    "ai_edge_litert",
+    "sng4onnx"
 ]
 stedge = [
     "stm32ai_dc @ file:///C:/Users/Tejas/AppData/Local/Temp/opencode/stm32ai-modelzoo-services/common",
+]
+ui = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "python-multipart>=0.0.9",
+    "jinja2>=3.1",
 ]
 all = [
     "stm32-yolo-pipeline[training,quantization,stedge]",
@@ -34,8 +49,20 @@ all = [
 pipeline = "pipeline.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["pipeline*"]
+include = ["pipeline*", "webui*"]
 
 [tool.pytest.ini_options]
 testpaths = ["pipeline", "src/tests"]
 pythonpath = ["."]
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu" },
+]
+torchvision = [
+    { index = "pytorch-cpu" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true

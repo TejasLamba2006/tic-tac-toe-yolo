@@ -271,7 +271,9 @@ class QuantizationStage(Stage):
         self.logger.info("Converting ONNX → SavedModel via onnx2tf CLI: %s", onnx_path)
 
         # Write a small wrapper script that patches np.load before onnx2tf.
-        wrapper_script = output_dir / "_onnx2tf_convert.py"
+        # Use a .tmp extension so uvicorn's watchfiles reloader never treats
+        # it as Python source and reloads the server mid-conversion.
+        wrapper_script = output_dir / "_onnx2tf_convert.tmp"
         wrapper_script.write_text(
             "import sys, os, io, numpy as np\n"
             "\n"
@@ -294,16 +296,74 @@ class QuantizationStage(Stage):
         )
 
         import subprocess
-        result = subprocess.run(
-            [sys.executable, str(wrapper_script)],
-            capture_output=True,
-            text=True,
-            timeout=300,
+        import threading
+
+        # On Windows, CREATE_NEW_PROCESS_GROUP detaches the child from the
+        # parent's console process group so that Ctrl+C / SIGINT events
+        # (e.g. from uvicorn's terminal) are NOT forwarded to this process.
+        _popen_kwargs: dict = dict(
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,  # merge stderr → stdout for single stream
             cwd=str(output_dir),
         )
+        if sys.platform == "win32":
+            _popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
 
-        if result.returncode != 0:
-            self.logger.error("onnx2tf CLI failed:\n%s", result.stderr[-2000:] if result.stderr else result.stdout[-2000:])
+        def _stream_to_logger(pipe) -> list[str]:
+            """Read lines from *pipe* and forward to self.logger in real time.
+            Returns accumulated lines so we can surface errors after the fact.
+            """
+            lines: list[str] = []
+            try:
+                for raw in iter(pipe.readline, b""):
+                    line = raw.decode("utf-8", errors="replace").rstrip()
+                    if line:
+                        lines.append(line)
+                        self.logger.info("[onnx2tf] %s", line)
+            except Exception:
+                pass
+            return lines
+
+
+        try:
+            _proc = subprocess.Popen(
+                [sys.executable, str(wrapper_script)],
+                **_popen_kwargs,
+            )
+
+            # Stream output in a daemon thread so it appears live in the UI.
+            _log_lines: list[list[str]] = [[]]
+            _reader = threading.Thread(
+                target=lambda: _log_lines.__setitem__(0, _stream_to_logger(_proc.stdout)),
+                daemon=True,
+            )
+            _reader.start()
+
+            try:
+                _proc.wait(timeout=300)
+                _reader.join(timeout=5)
+            except KeyboardInterrupt:
+                self.logger.warning(
+                    "onnx2tf conversion interrupted — terminating child process"
+                )
+                _proc.terminate()
+                try:
+                    _proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    _proc.kill()
+                raise
+            except subprocess.TimeoutExpired:
+                _proc.kill()
+                _proc.wait()
+                self.logger.error("onnx2tf conversion timed out after 300 s")
+                return None
+        except KeyboardInterrupt:
+            raise
+
+        returncode = _proc.returncode
+        if returncode != 0:
+            tail = "\n".join(_log_lines[0][-40:]) if _log_lines[0] else "(no output)"
+            self.logger.error("onnx2tf CLI failed (exit %d):\n%s", returncode, tail)
             return None
 
         # Step 3: Locate saved_model.pb in the exported tree.

@@ -79,7 +79,16 @@ class PipelineRunner:
             if ctx.dry_run:
                 result = self._dry_run_stage(stage, ctx)
             else:
-                result = stage.execute(ctx)
+                try:
+                    result = stage.execute(ctx)
+                except KeyboardInterrupt:
+                    results[stage.name] = StageResult(
+                        status=StageStatus.FAILED,
+                        message="Interrupted",
+                    )
+                    ctx.record_result(stage.name, results[stage.name])
+                    self._finalize_manifest(ctx, results)
+                    raise
 
             results[stage.name] = result
             ctx.record_result(stage.name, result)
