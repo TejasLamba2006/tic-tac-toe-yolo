@@ -32,6 +32,9 @@ const zipInput = document.getElementById("zip-input");
 const dropzoneFilename = document.getElementById("dropzone-filename");
 const summaryCard = document.getElementById("dataset-summary-card");
 const summaryBody = document.getElementById("dataset-summary-body");
+const splitCard = document.getElementById("dataset-split-card");
+const splitBtn = document.getElementById("split-dataset-btn");
+const splitStatus = document.getElementById("split-dataset-status");
 
 scanPathBtn.addEventListener("click", async () => {
   const path = datasetPathInput.value.trim();
@@ -105,6 +108,9 @@ function onDatasetInfo(info) {
   document.getElementById("config-form").classList.remove("hidden");
   document.getElementById("class-names-field").hidden = !!info.data_yaml;
 
+  splitCard.classList.toggle("hidden", !!info.has_split_layout);
+  splitStatus.textContent = "";
+
   // Prefill dataset name from folder name.
   const nameInput = document.querySelector('input[name="dataset_name"]');
   if (!nameInput.value) {
@@ -112,6 +118,28 @@ function onDatasetInfo(info) {
     nameInput.value = parts[parts.length - 1] || "dataset";
   }
 }
+
+splitBtn.addEventListener("click", async () => {
+  if (!state.datasetInfo) return;
+  const payload = {
+    path: state.datasetInfo.root,
+    train: Number(document.getElementById("split-train-ratio").value),
+    val: Number(document.getElementById("split-val-ratio").value),
+    test: Number(document.getElementById("split-test-ratio").value),
+    seed: Number(document.getElementById("split-seed").value),
+  };
+  setBusy(splitBtn, true, "Splitting...");
+  splitStatus.textContent = "";
+  try {
+    const info = await postJSON("/api/dataset/split", payload);
+    onDatasetInfo(info);
+    splitStatus.textContent = "Dataset split complete.";
+  } catch (err) {
+    alert(`Split failed: ${err.message}`);
+  } finally {
+    setBusy(splitBtn, false, "Split Dataset");
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Config tab
@@ -141,6 +169,7 @@ configForm.addEventListener("submit", async (e) => {
     batch_size: Number(fd.get("batch_size")),
     imgsz: Number(fd.get("imgsz")),
     device: fd.get("device") || "cpu",
+    workers: Number(fd.get("workers")),
     enable_int8: fd.get("enable_int8") === "on",
     class_names: fd.get("class_names") || "",
     deploy_stedge: fd.get("deploy_stedge") === "on",

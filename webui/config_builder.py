@@ -9,7 +9,9 @@ YAML is the only contract between the two.
 
 from __future__ import annotations
 
+import random
 import re
+import shutil
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -26,6 +28,9 @@ SPLIT_CANDIDATES = {
     "val": ["valid/images", "val/images", "valid", "val"],
     "test": ["test/images", "test"],
 }
+# Names of the standard split layout this module writes/reads (root/<split>/images).
+# Excluded when re-scanning for source images so re-running split_dataset() is safe.
+SPLIT_OUTPUT_DIRS = {"train", "val", "test"}
 
 
 class DatasetError(ValueError):
@@ -131,6 +136,58 @@ def inspect_dataset(root: Path) -> dict[str, Any]:
     }
 
 
+def split_dataset(root: Path, ratios: dict[str, float], seed: int = 42) -> dict[str, int]:
+    """Physically split a flat/non-standard-layout dataset into train/val/test.
+
+    Recursively collects every image under *root* (skipping the standard
+    ``train/``, ``val/``, ``test/`` output dirs so re-running is safe),
+    matches each to a same-stem ``.txt`` label found anywhere under
+    *root*, shuffles, and copies pairs into ``<split>/images`` +
+    ``<split>/labels`` -- the layout ``inspect_dataset`` recognizes.
+    """
+    total = sum(ratios.values())
+    if abs(total - 1.0) > 0.01:
+        raise DatasetError(f"Split ratios must sum to 1.0 (got {total:.2f})")
+
+    label_by_stem = {p.stem: p for p in root.rglob("*.txt")}
+
+    images = [
+        p
+        for p in root.rglob("*")
+        if p.suffix.lower() in IMAGE_EXTENSIONS
+        and p.relative_to(root).parts[0] not in SPLIT_OUTPUT_DIRS
+    ]
+    if not images:
+        raise DatasetError(f"No images found under {root}")
+
+    random.Random(seed).shuffle(images)
+
+    n = len(images)
+    n_train = int(n * ratios.get("train", 0.8))
+    n_val = int(n * ratios.get("val", 0.1))
+    buckets = {
+        "train": images[:n_train],
+        "val": images[n_train : n_train + n_val],
+        "test": images[n_train + n_val :],
+    }
+
+    counts: dict[str, int] = {}
+    for split, files in buckets.items():
+        if not files:
+            continue
+        img_dst = root / split / "images"
+        lbl_dst = root / split / "labels"
+        img_dst.mkdir(parents=True, exist_ok=True)
+        lbl_dst.mkdir(parents=True, exist_ok=True)
+        for img in files:
+            shutil.copy2(img, img_dst / img.name)
+            label = label_by_stem.get(img.stem)
+            if label is not None:
+                shutil.copy2(label, lbl_dst / f"{img.stem}.txt")
+        counts[split] = len(files)
+    return counts
+
+
 def generate_data_yaml(dataset_root: Path, class_names: list[str]) -> Path:
     """Write a minimal YOLO ``data.yaml`` when the dataset doesn't have one."""
     info = inspect_dataset(dataset_root)
@@ -200,7 +257,7 @@ def build_config_dict(form: dict[str, Any], dataset_info: dict[str, Any]) -> dic
             "epochs": int(form["epochs"]),
             "batch": int(form["batch_size"]),
             "imgsz": imgsz,
-            "workers": 0,
+            "workers": int(form.get("workers", 0)),
             "patience": 100,
             "optimizer": "auto",
             # Default to CPU: forcing CUDA device 0 on a machine without a

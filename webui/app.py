@@ -88,6 +88,33 @@ async def upload_dataset(file: UploadFile = File(...)) -> dict[str, Any]:
     return info
 
 
+class SplitDatasetRequest(BaseModel):
+    path: str
+    train: float = 0.8
+    val: float = 0.1
+    test: float = 0.1
+    seed: int = 42
+
+
+@app.post("/api/dataset/split")
+async def split_dataset(payload: SplitDatasetRequest) -> dict[str, Any]:
+    root = Path(payload.path).expanduser()
+    if not root.is_absolute():
+        root = (PROJECT_ROOT / root).resolve()
+    if not root.is_dir():
+        raise HTTPException(400, f"Directory not found: {root}")
+    try:
+        config_builder.split_dataset(
+            root,
+            {"train": payload.train, "val": payload.val, "test": payload.test},
+            payload.seed,
+        )
+        info = config_builder.inspect_dataset(root)
+    except config_builder.DatasetError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return info
+
+
 # ---------------------------------------------------------------------------
 # Config generation
 # ---------------------------------------------------------------------------
@@ -99,6 +126,7 @@ class GenerateConfigRequest(BaseModel):
     batch_size: int
     imgsz: int
     device: str = "cpu"
+    workers: int = 0
     enable_int8: bool = False
     class_names: str = ""
     deploy_stedge: bool = False

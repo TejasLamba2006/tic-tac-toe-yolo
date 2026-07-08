@@ -85,6 +85,35 @@
           <h2>Dataset summary</h2>
           <div id="dataset-summary-body"></div>
         </div>
+
+        <div class="card hidden" id="dataset-split-card">
+          <h2>Split dataset</h2>
+          <p class="hint">No train/val/test split was detected. Set ratios below and split the dataset in place into
+            <code>train/images</code>, <code>val/images</code>, and <code>test/images</code> (+ matching
+            <code>labels/</code>).</p>
+          <div class="form-grid">
+            <label class="field">
+              <span>Train ratio</span>
+              <input type="number" id="split-train-ratio" min="0" max="1" step="0.05" value="0.8" />
+            </label>
+            <label class="field">
+              <span>Val ratio</span>
+              <input type="number" id="split-val-ratio" min="0" max="1" step="0.05" value="0.1" />
+            </label>
+            <label class="field">
+              <span>Test ratio</span>
+              <input type="number" id="split-test-ratio" min="0" max="1" step="0.05" value="0.1" />
+            </label>
+            <label class="field">
+              <span>Seed</span>
+              <input type="number" id="split-seed" value="42" />
+            </label>
+          </div>
+          <div class="form-actions">
+            <button type="button" class="btn btn-primary" id="split-dataset-btn">Split Dataset</button>
+            <span id="split-dataset-status" class="hint-inline"></span>
+          </div>
+        </div>
       </section>
 
       <!-- Config Tab -->
@@ -133,6 +162,13 @@
               </select>
               <span class="hint-inline">Pick GPU only if this machine has a CUDA-capable card &amp; torch+cuda
                 installed.</span>
+            </label>
+
+            <label class="field">
+              <span>Dataloader Workers</span>
+              <input type="number" name="workers" min="0" max="32" value="0" required />
+              <span class="hint-inline">Number of subprocesses for data loading. Keep at 0 on Windows/low-core
+                machines to avoid multiprocessing issues.</span>
             </label>
           </div>
 

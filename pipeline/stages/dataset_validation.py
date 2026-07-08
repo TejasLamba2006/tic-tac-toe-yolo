@@ -172,7 +172,10 @@ class DatasetValidationStage(Stage):
         stems_seen: dict[str, Path] = {}
         label_count = 0
 
-        for img_path in images:
+        for i, img_path in enumerate(images, start=1):
+            if i % 1000 == 0 or i == len(images):
+                self.logger.info("  %s: %d/%d images", split_name, i, len(images))
+
             # Duplicate check
             stem = img_path.stem
             if stem in stems_seen:
