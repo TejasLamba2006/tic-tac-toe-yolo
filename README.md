@@ -1,12 +1,14 @@
 # STM32 YOLO Pipeline
 
-Train a YOLO object detection model and deploy it to an STM32MP257F-DK board through an automated pipeline. The pipeline handles everything from dataset validation to quantized model export, with optional cloud compilation via ST Edge AI Developer Cloud.
+Train a YOLO object detection model and deploy it to an STM32MP257F-DK board through an automated pipeline. The pipeline walks your dataset from validation all the way to a quantized model file, with optional cloud compilation through ST Edge AI Developer Cloud.
+
+![Dashboard home](docs/screenshots/01-dashboard-home.png)
 
 ## What this does
 
-You give it a YOLO-formatted dataset (images + label files) and it:
+You give it a YOLO-formatted dataset (images plus label files) and it:
 
-1. Validates your dataset (checks images, labels, class distribution)
+1. Validates your dataset (images, labels, class distribution)
 2. Augments images (brightness, contrast, blur, noise)
 3. Trains a YOLOv8n model
 4. Evaluates precision, recall, mAP
@@ -15,16 +17,16 @@ You give it a YOLO-formatted dataset (images + label files) and it:
 7. Compiles to NBG via ST Edge AI cloud (optional)
 8. Deploys to your STM32 board via SSH (optional)
 
-Each step saves its output. If the pipeline crashes mid-run, it picks up where it left off.
+Each step saves its output to its own folder. If the pipeline crashes partway through, it picks up where it left off on the next run.
 
 ## Prerequisites
 
 ### Windows
 
-- **Python 3.12** — the pipeline does not work with Python 3.13 or 3.14. TensorFlow and the quantization stage require 3.12 specifically.
-- **uv** (package manager) — install from https://docs.astral.sh/uv/getting-started/installation/
-- **Git** — install from https://git-scm.com/download/win
-- A CUDA-capable GPU is optional but makes training 10-50x faster. The pipeline falls back to CPU automatically.
+- **Python 3.12.** The pipeline does not work with 3.13 or 3.14. TensorFlow and the quantization stage need 3.12 specifically.
+- **uv** (package manager). Install from https://docs.astral.sh/uv/getting-started/installation/
+- **Git.** Install from https://git-scm.com/download/win
+- A CUDA-capable GPU is optional but makes training 10 to 50x faster. The pipeline falls back to CPU on its own.
 
 ### Linux (Ubuntu/Debian)
 
@@ -32,14 +34,24 @@ Each step saves its output. If the pipeline crashes mid-run, it picks up where i
 sudo apt update && sudo apt install -y python3.12 python3.12-venv python3-pip git
 ```
 
-For GPU support, install CUDA toolkit from https://developer.nvidia.com/cuda-downloads
+For GPU support, install the CUDA toolkit from https://developer.nvidia.com/cuda-downloads
 
-### Clone the repo
+### Clone the repo (with the submodule)
+
+This repo includes `stm32ai-modelzoo-services` as a git submodule. It holds the ST Edge AI SDK (`stm32ai_dc`) that the cloud-compile stage wraps. Clone with `--recurse-submodules` so it comes down populated:
 
 ```bash
-git clone https://github.com/TejasLamba2006/STM32M257f-dk-x-linux-ai.git
+git clone --recurse-submodules https://github.com/TejasLamba2006/STM32M257f-dk-x-linux-ai.git
 cd STM32M257f-dk-x-linux-ai
 ```
+
+If you already cloned without the flag, fetch the submodule now:
+
+```bash
+git submodule update --init --recursive
+```
+
+You should see files under `stm32ai-modelzoo-services/common/stm32ai_dc/`. If that folder is empty, the submodule did not initialize, and the `stedge_compile` stage will not work.
 
 ## Setup
 
@@ -57,9 +69,9 @@ uv python install 3.12
 uv venv --python 3.12
 ```
 
-If you don't have `uv`, install it first:
+If you don't have `uv` yet:
 
-**Windows:**
+**Windows (PowerShell):**
 ```powershell
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
@@ -94,9 +106,9 @@ You should see `(.venv)` at the start of your terminal prompt after this.
 uv pip install -e ".[all]"
 ```
 
-This installs everything: training, quantization, the web dashboard, and the ST Edge AI SDK.
+This installs everything: training, quantization, the web dashboard, and the ST Edge AI SDK from the submodule.
 
-If you only need training and local stages (no cloud compilation, no web dashboard):
+If you only need training and the local stages (no cloud compilation, no web dashboard):
 
 ```bash
 uv pip install -e ".[training]"
@@ -108,7 +120,7 @@ uv pip install -e ".[training]"
 python run_pipeline.py --list-stages
 ```
 
-You should see 11 stages listed. If you get `ModuleNotFoundError: No module named 'cv2'`, your virtual environment is not activated — go back to Step 2.
+You should see 11 stages listed. If you get `ModuleNotFoundError: No module named 'cv2'`, your virtual environment is not active. Go back to Step 2.
 
 ## Your dataset
 
@@ -154,7 +166,7 @@ dataset:
 python run_pipeline.py
 ```
 
-This runs all 11 stages in order. It takes a while on CPU (30+ minutes for training). On GPU, training alone is 1-5 minutes for small datasets.
+This runs all 11 stages in order. On CPU it takes a while (30+ minutes for training). On GPU, training alone is 1 to 5 minutes for small datasets.
 
 ### Run a single stage
 
@@ -181,6 +193,16 @@ python run_pipeline.py --dry-run
 ```bash
 python run_pipeline.py --list-stages
 ```
+
+### Quick smoke test (5 epochs)
+
+A small config is checked in for verifying the pipeline end to end without a long training run:
+
+```bash
+python run_pipeline.py --config pipeline/config/config_5epoch.yaml
+```
+
+It trains for 5 epochs on `dataset_boards`, exports to ONNX, quantizes to INT8 TFLite, and writes a report. Useful for confirming your environment is set up before committing to a real run.
 
 ## Configuration
 
@@ -228,7 +250,75 @@ A browser-based UI for running the pipeline and inspecting results:
 python run_ui.py
 ```
 
-Then open http://127.0.0.1:8000 in your browser. No login required. Do not expose this to the internet.
+Then open http://127.0.0.1:8000 in your browser. No login required. Do not expose this to the internet, since the dashboard can launch the pipeline subprocess.
+
+The dashboard has five tabs that walk you through the whole flow. You point it at a dataset, generate a config, run a preflight check, kick off the pipeline, and read the results. Everything the dashboard does, the CLI can do too. The dashboard is just a friendlier front end for the same stages.
+
+### 01 Dataset
+
+Point the pipeline at a folder already on disk, or upload a ZIP. The scanner reports how many images live in each split, what classes it found in `data.yaml`, and whether a train/val/test layout exists. If no split exists, a ratio form appears to split the dataset in place.
+
+![Dataset scan](docs/screenshots/02-dataset-scanned.png)
+
+### 02 Configuration
+
+Fill in dataset name, epochs, batch size, image size, and device. Toggles let you enable INT8 quantization and ST Edge AI cloud compilation. The generated YAML shows up in a preview pane and saves to `generated_configs/<name>.yaml`.
+
+![Configuration form](docs/screenshots/03-config-form.png)
+
+![Generated config](docs/screenshots/04-config-generated.png)
+
+### 03 Preflight
+
+Before you burn training time, this tab checks that the right Python packages are installed, that the dataset path resolves, and that there is enough disk space. It runs against the config you generated in the previous tab.
+
+![Preflight checks](docs/screenshots/05-preflight.png)
+
+### 04 Run & Logs
+
+Starts the pipeline as a background process and streams the log output live into a terminal pane. Status flips from Idle to Running to Success (or Failed). You can stop a run mid-flight. The log coloring matches the pipeline's own level colors.
+
+![Run and logs](docs/screenshots/06-run-logs.png)
+
+![Run complete](docs/screenshots/07-run-complete.png)
+
+### 05 Results
+
+Reads the pipeline's own `report/pipeline_report.json` and training `results.csv` and plots them. Scorecards show precision, recall, mAP50, mAP50-95, and F1. Charts cover the stage timeline, training loss and metrics curves, and model size across formats. Nothing is recomputed. The dashboard just renders what the pipeline already wrote.
+
+![Results](docs/screenshots/08-results.png)
+
+## ST Edge AI Developer Cloud (optional)
+
+The `stedge_compile` stage turns your quantized TFLite model into a Neural Binary Graph (`.nb`) file that runs on the STM32 NPU. The compilation happens in the cloud through ST's `stm32ai_dc` SDK.
+
+### Why it is a submodule
+
+The `stm32ai_dc` package is part of STMicroelectronics' `stm32ai-modelzoo-services` repo. Upstream ships it without a `pyproject.toml`, and its directory paths are too long for Windows in a few places. So it lives here as a git submodule under `stm32ai-modelzoo-services/`, and the `[stedge]` optional dependency installs it from that local path. The `pipeline/stedge_wrapper.py` module wraps the SDK into the simpler upload, generate, download flow the stage needs.
+
+### Setting it up
+
+1. Make sure the submodule is initialized (see the clone step above).
+2. Install the stedge extra:
+   ```bash
+   uv pip install -e ".[stedge]"
+   ```
+3. Set your ST Edge AI credentials. The stage reads them from environment variables, never from the config file:
+   ```bash
+   export STEDGE_USERNAME=your_email@example.com
+   export STEDGE_PASSWORD=your_password
+   ```
+   The SDK also accepts `STM32AI_USERNAME` / `STM32AI_PASSWORD`.
+4. Enable the stage in your config:
+   ```yaml
+   stedge:
+     enabled: true
+     target: "STM32MP257F-DK"
+   ```
+
+### On GitHub, clicking the submodule does nothing
+
+On the GitHub repo page, `stm32ai-modelzoo-services` shows up as a folder with a little arrow icon. Clicking it takes you nowhere. That is normal git behavior for a submodule. GitHub treats a submodule as a pointer to a specific commit in another repo, not as a folder it can browse inline. To see its contents, either clone the parent repo with `--recurse-submodules`, or click through to `https://github.com/STMicroelectronics/stm32ai-modelzoo-services` directly.
 
 ## Project structure
 
@@ -260,7 +350,7 @@ Then open http://127.0.0.1:8000 in your browser. No login required. Do not expos
 │       └── report.py
 ├── webui/                   # FastAPI dashboard
 ├── scripts/                 # standalone utilities
-├── stm32ai-modelzoo-services/  # vendored ST SDK
+├── stm32ai-modelzoo-services/  # git submodule (ST Edge AI SDK)
 └── dataset4/                # example dataset
 ```
 
@@ -268,7 +358,7 @@ Then open http://127.0.0.1:8000 in your browser. No login required. Do not expos
 
 ### "No module named 'cv2'"
 
-Your virtual environment is not activated, or opencv is not installed. Run:
+Your virtual environment is not active, or opencv is not installed. Run:
 
 ```bash
 uv pip install -e ".[all]"
@@ -302,28 +392,12 @@ uv venv --python 3.12
 uv pip install -e ".[all]"
 ```
 
-### Verification stage fails when deployment is disabled
-
-This is a known issue. The verification stage requires `deployment.host` and `deployment.username` to be set, even when deployment is disabled. To work around it, either:
-
-1. Set deployment config in `config.yaml`:
-   ```yaml
-   deployment:
-     enabled: true
-     host: your_board_ip
-     username: your_board_user
-   ```
-
-2. Or run stages individually:
-   ```bash
-   python run_pipeline.py --from-stage training --from-stage quantization
-   ```
-
 ### GPU out of memory
 
 Lower the batch size in `config.yaml`:
 
-```training:
+```yaml
+training:
   batch: 2   # or even 1
 ```
 
@@ -341,7 +415,16 @@ rm -rf artifacts/training
 
 ### ST Edge AI cloud: "Invalid credentials"
 
-Double-check your `STEDGE_USERNAME` and `STEDGE_PASSWORD` environment variables. The SDK also accepts `STM32AI_USERNAME`/`STM32AI_PASSWORD`.
+Double-check your `STEDGE_USERNAME` and `STEDGE_PASSWORD` environment variables. The SDK also accepts `STM32AI_USERNAME` / `STM32AI_PASSWORD`.
+
+### "No module named 'common'" or stedge install fails
+
+The `[stedge]` extra installs `stm32ai_dc` from the `stm32ai-modelzoo-services` submodule. If the submodule is not initialized, the local path it points at does not exist and the install fails. Fix:
+
+```bash
+git submodule update --init --recursive
+uv pip install -e ".[stedge]"
+```
 
 ### ONNX export fails
 

@@ -50,6 +50,13 @@ html, body {
   font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
 }
 
+/* Generic visibility toggle. JS applies `.hidden` to many elements
+   (#results-empty, #benchmark-empty, #dataset-split-card,
+   #config-preview-card, #preflight-results-card, #results-content, ...)
+   so the rule must be global, not scoped per-selector. Without it the
+   empty-state cards stay visible on top of the real content. */
+.hidden { display: none !important; }
+
 /* ── Shell layout ──────────────────────────────────────────── */
 .shell {
   display: flex;

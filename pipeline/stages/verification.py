@@ -35,6 +35,9 @@ class VerificationStage(Stage):
 
     def validate_inputs(self, ctx: PipelineContext) -> list[str]:
         errors: list[str] = []
+        if not ctx.config.deployment.enabled:
+            return errors
+
         cfg = ctx.config.deployment
 
         if not cfg.host:

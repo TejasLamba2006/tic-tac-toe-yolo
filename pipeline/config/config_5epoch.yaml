@@ -1,0 +1,113 @@
+# =============================================================================
+# 5-Epoch smoke-test config
+# =============================================================================
+# Quick run for verifying the pipeline end-to-end on a small dataset.
+# Uses dataset_boards (matches data.yaml) and a separate artifacts dir so
+# it never collides with a real training run.
+
+artifacts_dir: artifacts_5epoch
+
+logging:
+  level: INFO
+  log_dir: artifacts_5epoch/logs
+  log_to_console: true
+
+dataset:
+  path: dataset_boards
+  train_images: train/images
+  train_labels: train/labels
+  val_images: val/images
+  val_labels: val/labels
+  test_images: test/images
+  test_labels: test/labels
+  image_extensions: [".jpg", ".jpeg", ".png", ".bmp"]
+  split_enabled: false
+  split_ratios:
+    train: 0.8
+    val: 0.1
+    test: 0.1
+  split_seed: 42
+
+augmentation:
+  enabled: false      # keep the smoke test fast
+  output_dir: augmented
+
+training:
+  model: yolov8n.pt
+  data_yaml: data.yaml
+  epochs: 5
+  batch: 4
+  imgsz: 320
+  workers: 0
+  patience: 100
+  optimizer: auto
+  lr0: 0.01
+  lrf: 0.01
+  momentum: 0.937
+  weight_decay: 0.0005
+  device: 0          # CUDA available on this machine
+  project: null
+  name: null
+  exist_ok: true
+  resume: false
+  seed: 0
+  deterministic: true
+  amp: true
+  cache: false
+  plots: true
+  save: true
+
+export:
+  opset: 12
+  imgsz: 320
+  simplify: false
+  output_dir: export
+
+quantization:
+  enabled: true
+  quantization_type: per_channel
+  quantization_input_type: uint8
+  quantization_output_type: float
+  input_shape: [320, 320, 3]
+  rescaling_scale: 255.0
+  rescaling_offset: 0.0
+  fake: false
+  calib_dataset_path: ""
+  output_dir: quantization
+  model_name: tictactoe_yolov8
+  use_case: od_tictactoe
+
+stedge:
+  enabled: false
+  target: "STM32MP257F-DK"
+  optimization: ""
+  board: ""
+  runtime: ""
+  output_dir: compilation
+  username: ""
+  password: ""
+  timeout: 600
+
+deployment:
+  enabled: false
+  host: ""
+  port: 22
+  username: ""
+  password: ""
+  ssh_key: ""
+  remote_model_directory: ""
+  remote_working_directory: ""
+  inference_command: ""
+  verification_command: ""
+  benchmark_command: ""
+
+benchmark:
+  enabled: false
+  iterations: 100
+  warmup_iterations: 10
+  output_dir: benchmark
+
+report:
+  enabled: true
+  formats: [json, html, markdown]
+  output_dir: reports

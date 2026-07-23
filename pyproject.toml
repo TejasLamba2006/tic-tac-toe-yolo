@@ -33,7 +33,10 @@ quantization = [
     "sng4onnx"
 ]
 stedge = [
-    "stm32ai_dc @ file:///C:/Users/Tejas/AppData/Local/Temp/opencode/stm32ai-modelzoo-services/common",
+    # The stm32ai_dc SDK ships inside the stm32ai-modelzoo-services git
+    # submodule (see .gitmodules). Upstream has no pyproject.toml, so we
+    # install it from the submodule path after `git submodule update --init`.
+    "stm32ai_dc @ file:///./stm32ai-modelzoo-services/common",
 ]
 ui = [
     "fastapi>=0.110",

@@ -434,10 +434,21 @@ const chartInstances = {};
 
 function renderChart(canvasId, config) {
   const canvas = document.getElementById(canvasId);
-  if (chartInstances[canvasId]) {
-    chartInstances[canvasId].destroy();
+  // Destroy any existing instance. Chart.js v4 also binds the instance to
+  // the canvas as `canvas.chart`; if our map lost track of it (e.g. after a
+  // hot reload), a stale instance would otherwise throw
+  // "Canvas is already in use" and silently blank the chart.
+  const existing = chartInstances[canvasId] || canvas.chart;
+  if (existing) {
+    try { existing.destroy(); } catch (e) { /* already gone */ }
   }
   chartInstances[canvasId] = new Chart(canvas, config);
+  // If the canvas was rendered while its tab was hidden (display:none),
+  // it initialised at 0x0 and draws nothing once shown. Force a resize so
+  // it picks up the real dimensions.
+  if (canvas.clientWidth === 0) {
+    try { chartInstances[canvasId].resize(); } catch (e) { /* noop */ }
+  }
 }
 
 function chartOptions(title) {
