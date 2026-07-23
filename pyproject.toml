@@ -33,10 +33,15 @@ quantization = [
     "sng4onnx"
 ]
 stedge = [
-    # The stm32ai_dc SDK ships inside the stm32ai-modelzoo-services git
-    # submodule (see .gitmodules). Upstream has no pyproject.toml, so we
-    # install it from the submodule path after `git submodule update --init`.
-    "stm32ai_dc @ file:///./stm32ai-modelzoo-services/common",
+    # The stm32ai_dc SDK is vendored under vendor/common/ (copied from
+    # STMicroelectronics/stm32ai-modelzoo-services, commit 0f6210ed, because
+    # upstream ships no pyproject.toml and the whole repo is large with
+    # Windows-incompatible path lengths). It ships with the project install
+    # via [tool.setuptools.packages.find] below. Only its runtime deps need
+    # declaring here:
+    "requests>=2.28",
+    "marshmallow>=3.20",
+    "tqdm>=4.60",
 ]
 ui = [
     "fastapi>=0.110",
@@ -52,7 +57,10 @@ all = [
 pipeline = "pipeline.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["pipeline*", "webui*"]
+# Project packages (pipeline, webui) live at the repo root; the vendored
+# ST Edge AI SDK lives under vendor/common/ (importable as common.stm32ai_dc).
+include = ["pipeline*", "webui*", "common*"]
+where = [".", "vendor"]
 
 [tool.pytest.ini_options]
 testpaths = ["pipeline", "src/tests"]

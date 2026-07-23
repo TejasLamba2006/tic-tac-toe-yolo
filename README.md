@@ -36,22 +36,15 @@ sudo apt update && sudo apt install -y python3.12 python3.12-venv python3-pip gi
 
 For GPU support, install the CUDA toolkit from https://developer.nvidia.com/cuda-downloads
 
-### Clone the repo (with the submodule)
-
-This repo includes `stm32ai-modelzoo-services` as a git submodule. It holds the ST Edge AI SDK (`stm32ai_dc`) that the cloud-compile stage wraps. Clone with `--recurse-submodules` so it comes down populated:
+### Clone the repo
 
 ```bash
-git clone --recurse-submodules https://github.com/TejasLamba2006/STM32M257f-dk-x-linux-ai.git
-cd STM32M257f-dk-x-linux-ai
+git clone https://github.com/TejasLamba2006/tic-tac-toe-yolo.git
+cd tic-tac-toe-yolo
+git checkout pipeline
 ```
 
-If you already cloned without the flag, fetch the submodule now:
-
-```bash
-git submodule update --init --recursive
-```
-
-You should see files under `stm32ai-modelzoo-services/common/stm32ai_dc/`. If that folder is empty, the submodule did not initialize, and the `stedge_compile` stage will not work.
+The ST Edge AI SDK (`stm32ai_dc`) is vendored directly in the repo under `vendor/common/stm32ai_dc/`. No submodule init needed.
 
 ## Setup
 
@@ -106,7 +99,7 @@ You should see `(.venv)` at the start of your terminal prompt after this.
 uv pip install -e ".[all]"
 ```
 
-This installs everything: training, quantization, the web dashboard, and the ST Edge AI SDK from the submodule.
+This installs everything: training, quantization, the web dashboard, and the vendored ST Edge AI SDK.
 
 If you only need training and the local stages (no cloud compilation, no web dashboard):
 
@@ -292,33 +285,28 @@ Reads the pipeline's own `report/pipeline_report.json` and training `results.csv
 
 The `stedge_compile` stage turns your quantized TFLite model into a Neural Binary Graph (`.nb`) file that runs on the STM32 NPU. The compilation happens in the cloud through ST's `stm32ai_dc` SDK.
 
-### Why it is a submodule
+### Why it is vendored
 
-The `stm32ai_dc` package is part of STMicroelectronics' `stm32ai-modelzoo-services` repo. Upstream ships it without a `pyproject.toml`, and its directory paths are too long for Windows in a few places. So it lives here as a git submodule under `stm32ai-modelzoo-services/`, and the `[stedge]` optional dependency installs it from that local path. The `pipeline/stedge_wrapper.py` module wraps the SDK into the simpler upload, generate, download flow the stage needs.
+The `stm32ai_dc` package is part of STMicroelectronics' `stm32ai-modelzoo-services` repo. Upstream ships no `pyproject.toml` for it, and the full repo has Windows-incompatible path lengths and weighs a lot. So we vendor only `common/stm32ai_dc` (the files this project actually uses) under `vendor/common/stm32ai_dc`. The `[stedge]` extra declares its runtime deps (`requests`, `marshmallow`, `tqdm`), and the package ships with the project install via `[tool.setuptools.packages.find]`. The `pipeline/stedge_wrapper.py` module wraps the SDK into the simpler upload, generate, download flow the stage needs.
 
 ### Setting it up
 
-1. Make sure the submodule is initialized (see the clone step above).
-2. Install the stedge extra:
+1. Install the stedge extra:
    ```bash
    uv pip install -e ".[stedge]"
    ```
-3. Set your ST Edge AI credentials. The stage reads them from environment variables, never from the config file:
+2. Set your ST Edge AI credentials. The stage reads them from environment variables, never from the config file:
    ```bash
    export STEDGE_USERNAME=your_email@example.com
    export STEDGE_PASSWORD=your_password
    ```
    The SDK also accepts `STM32AI_USERNAME` / `STM32AI_PASSWORD`.
-4. Enable the stage in your config:
+3. Enable the stage in your config:
    ```yaml
    stedge:
      enabled: true
      target: "STM32MP257F-DK"
    ```
-
-### On GitHub, clicking the submodule does nothing
-
-On the GitHub repo page, `stm32ai-modelzoo-services` shows up as a folder with a little arrow icon. Clicking it takes you nowhere. That is normal git behavior for a submodule. GitHub treats a submodule as a pointer to a specific commit in another repo, not as a folder it can browse inline. To see its contents, either clone the parent repo with `--recurse-submodules`, or click through to `https://github.com/STMicroelectronics/stm32ai-modelzoo-services` directly.
 
 ## Project structure
 
@@ -350,7 +338,8 @@ On the GitHub repo page, `stm32ai-modelzoo-services` shows up as a folder with a
 │       └── report.py
 ├── webui/                   # FastAPI dashboard
 ├── scripts/                 # standalone utilities
-├── stm32ai-modelzoo-services/  # git submodule (ST Edge AI SDK)
+├── vendor/
+│   └── common/stm32ai_dc/     # vendored ST Edge AI SDK
 └── dataset4/                # example dataset
 ```
 
@@ -419,10 +408,9 @@ Double-check your `STEDGE_USERNAME` and `STEDGE_PASSWORD` environment variables.
 
 ### "No module named 'common'" or stedge install fails
 
-The `[stedge]` extra installs `stm32ai_dc` from the `stm32ai-modelzoo-services` submodule. If the submodule is not initialized, the local path it points at does not exist and the install fails. Fix:
+The `[stedge]` extra declares runtime deps (`requests`, `marshmallow`, `tqdm`). The `stm32ai_dc` package itself is vendored at `vendor/common/stm32ai_dc` and ships with the project. If the import fails, reinstall the project:
 
 ```bash
-git submodule update --init --recursive
 uv pip install -e ".[stedge]"
 ```
 

@@ -1,3 +1,0 @@
-[submodule "stm32ai-modelzoo-services"]
-	path = stm32ai-modelzoo-services
-	url = https://github.com/STMicroelectronics/stm32ai-modelzoo-services.git
